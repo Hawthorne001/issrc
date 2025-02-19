@@ -2,7 +2,7 @@ unit Setup.MainFunc;
 
 {
   Inno Setup
-  Copyright (C) 1997-2024 Jordan Russell
+  Copyright (C) 1997-2025 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -110,7 +110,7 @@ var
   Entries: array[TEntryType] of TList;
   WizardImages: TList;
   WizardSmallImages: TList;
-  CloseApplicationsFilterList: TStringList;
+  CloseApplicationsFilterList, CloseApplicationsFilterExcludesList: TStringList;
 
   { User options }
   ActiveLanguage: Integer = -1;
@@ -152,8 +152,7 @@ var
   DisableCodeConsts: Integer;
   SetupExitCode: Integer;
   CreatedIcon: Boolean;
-  RestartInitiatedByThisProcess, DownloadTemporaryFileProcessMessages: Boolean;
-  TaskbarButtonHidden: Boolean;
+  RestartInitiatedByThisProcess, DownloadTemporaryFileOrExtract7ZipArchiveProcessMessages: Boolean;
   InstallModeRootKey: HKEY;
 
   CodeRunner: TScriptRunner;
@@ -187,6 +186,7 @@ procedure Initialize64BitInstallMode(const A64BitInstallMode: Boolean);
 procedure Log64BitInstallMode;
 procedure InitializeCommonVars;
 procedure InitializeSetup;
+procedure InitializeWizard;
 procedure InitMainNonSHFolderConsts;
 function InstallOnThisVersion(const MinVersion: TSetupVersionData;
   const OnlyBelowVersion: TSetupVersionData): TInstallOnThisVersionResult;
@@ -212,7 +212,6 @@ procedure RemoveTempInstallDir;
 procedure SaveInf(const FileName: String);
 procedure SaveResourceToTempFile(const ResName, Filename: String);
 procedure SetActiveLanguage(const I: Integer);
-procedure SetTaskbarButtonVisibility(const AVisible: Boolean);
 procedure ShellExecuteAsOriginalUser(hWnd: HWND; Operation, FileName, Parameters, Directory: LPWSTR; ShowCmd: Integer); stdcall;
 function ShouldDisableFsRedirForFileEntry(const FileEntry: PSetupFileEntry): Boolean;
 function ShouldDisableFsRedirForRunEntry(const RunEntry: PSetupRunEntry): Boolean;
@@ -227,7 +226,7 @@ function ShouldProcessIconEntry(const WizardComponents, WizardTasks: TStringList
   const WizardNoIcons: Boolean; const IconEntry: PSetupIconEntry): Boolean;
 function ShouldProcessRunEntry(const WizardComponents, WizardTasks: TStringList;
   const RunEntry: PSetupRunEntry): Boolean;
-function TestPassword(const Password: String): Boolean;
+function TestPassword(const EncryptionKey: TSetupEncryptionKey): Boolean;
 procedure UnloadSHFolderDLL;
 function WindowsVersionAtLeast(const AMajor, AMinor: Byte; const ABuild: Word = 0): Boolean;
 function IsWindows8: Boolean;
@@ -237,15 +236,15 @@ function IsWindows11: Boolean;
 implementation
 
 uses
-  ShellAPI, ShlObj, StrUtils,
+  ShellAPI, ShlObj, StrUtils, ActiveX, RegStr, ChaCha20,
   SetupLdrAndSetup.Messages, Shared.SetupMessageIDs, Setup.Install, SetupLdrAndSetup.InstFunc,
   Setup.InstFunc, SetupLdrAndSetup.RedirFunc, PathFunc,
   Compression.Base, Compression.Zlib, Compression.bzlib, Compression.LZMADecompressor,
   Shared.SetupEntFunc, Setup.SelectLanguageForm,
   Setup.WizardForm, Setup.DebugClient, Shared.VerInfoFunc, Setup.FileExtractor,
-  Shared.FileClass, Setup.LoggingFunc, SHA1, ActiveX,
+  Shared.FileClass, Setup.LoggingFunc,
   SimpleExpression, Setup.Helper, Setup.SpawnClient, Setup.SpawnServer,
-  Setup.DotNetFunc, Shared.TaskDialogFunc, RegStr, Setup.MainForm;
+  Setup.DotNetFunc, Shared.TaskDialogFunc, Setup.MainForm;
 
 var
   ShellFolders: array[Boolean, TShellFolderID] of String;
@@ -371,17 +370,19 @@ begin
   Result := -1;
 end;
 
-function TestPassword(const Password: String): Boolean;
-var
-  Context: TSHA1Context;
-  Hash: TSHA1Digest;
+{ This function assumes EncryptionKey is based on the password }
+function TestPassword(const EncryptionKey: TSetupEncryptionKey): Boolean;
 begin
-  SHA1Init(Context);
-  SHA1Update(Context, PAnsiChar('PasswordCheckHash')^, Length('PasswordCheckHash'));
-  SHA1Update(Context, SetupHeader.PasswordSalt, SizeOf(SetupHeader.PasswordSalt));
-  SHA1Update(Context, Pointer(Password)^, Length(Password)*SizeOf(Password[1]));
-  Hash := SHA1Final(Context);
-  Result := SHA1DigestsEqual(Hash, SetupHeader.PasswordHash);
+  { Do same as compiler did in GeneratePasswordTest and compare results }
+  var Nonce := SetupHeader.EncryptionBaseNonce;
+  Nonce.RandomXorFirstSlice := Nonce.RandomXorFirstSlice xor -1;
+
+  var Context: TChaCha20Context;
+  XChaCha20Init(Context, EncryptionKey[0], Length(EncryptionKey), Nonce, SizeOf(Nonce), 0);
+  var PasswordTest := 0;
+  XChaCha20Crypt(Context, PasswordTest, PasswordTest, SizeOf(PasswordTest));
+
+  Result := PasswordTest = SetupHeader.PasswordTest;
 end;
 
 class function TDummyClass.ExpandCheckOrInstallConstant(Sender: TSimpleExpression;
@@ -863,7 +864,7 @@ function ExpandIndividualConst(Cnst: String;
                  PChar(ExpandConstEx(Subkey, CustomConsts)),
                  0, KEY_QUERY_VALUE, K) = ERROR_SUCCESS then begin
                 RegQueryStringValue(K, PChar(ExpandConstEx(Value, CustomConsts)),
-                  Result);
+                  Result, True); { also allows REG_DWORD }
                 RegCloseKey(K);
               end;
               Exit;
@@ -1176,12 +1177,6 @@ begin
       Result := UninstallExpandedLanguage
     else
       Result := PSetupLanguageEntry(Entries[seLanguage][ActiveLanguage]).Name
-  end
-  else if Cnst = 'hwnd' then begin
-    if Assigned(MainForm) then
-      Result := IntToStr(MainForm.Handle)
-    else
-      Result := '0';
   end
   else if Cnst = 'wizardhwnd' then begin
     if Assigned(WizardForm) then
@@ -1920,7 +1915,7 @@ var
 begin
   Filename := AFilename;
 
-  { First: check filter and self. }
+  { First: check filters and self. }
   if Filename <> '' then begin
     CheckFilter := Boolean(Param);
     if CheckFilter then begin
@@ -1932,6 +1927,15 @@ begin
           Break;
         end;
       end;
+      if Match then begin
+        for I := 0 to CloseApplicationsFilterExcludesList.Count-1 do begin
+          if WildcardMatch(PChar(Text), PChar(CloseApplicationsFilterExcludesList[I])) then begin
+            Match := False;
+            Break;
+          end;
+        end;
+      end;
+
       if not Match then begin
         { No match with filter so exit but don't return an error. }
         Result := True;
@@ -2233,33 +2237,6 @@ begin
   SetActiveLanguage(I);
 end;
 
-procedure SetTaskbarButtonVisibility(const AVisible: Boolean);
-var
-  ExStyle: Longint;
-begin
-  { The taskbar button is hidden by setting the WS_EX_TOOLWINDOW style on the
-    application window. We can't simply hide the window because on D3+ the VCL
-    would just show it again in TApplication.UpdateVisible when the first form
-    is shown. }
-  TaskbarButtonHidden := not AVisible;  { see WM_STYLECHANGING hook in Setup.dpr }
-  if (GetWindowLong(Application.Handle, GWL_EXSTYLE) and WS_EX_TOOLWINDOW = 0) <> AVisible then begin
-    SetWindowPos(Application.Handle, 0, 0, 0, 0, 0, SWP_NOSIZE or
-      SWP_NOMOVE or SWP_NOZORDER or SWP_NOACTIVATE or SWP_HIDEWINDOW);
-    ExStyle := GetWindowLong(Application.Handle, GWL_EXSTYLE);
-    if AVisible then
-      ExStyle := ExStyle and not WS_EX_TOOLWINDOW
-    else
-      ExStyle := ExStyle or WS_EX_TOOLWINDOW;
-    SetWindowLong(Application.Handle, GWL_EXSTYLE, ExStyle);
-    if AVisible then
-      { Show and activate when becoming visible }
-      ShowWindow(Application.Handle, SW_SHOW)
-    else
-      SetWindowPos(Application.Handle, 0, 0, 0, 0, 0, SWP_NOSIZE or
-        SWP_NOMOVE or SWP_NOZORDER or SWP_NOACTIVATE or SWP_SHOWWINDOW);
-  end;
-end;
-
 procedure LogCompatibilityMode;
 var
   S: String;
@@ -2422,14 +2399,6 @@ begin
   RestartInitiatedByThisProcess := True;
   { Note: Depending on the OS, RestartComputer may not return if successful }
   if not RestartComputer then begin
-    { Hack for when called from RespawnSetupElevated: re-show the
-      application's taskbar button } 
-    ShowWindow(Application.Handle, SW_SHOW);
-    { If another app denied the shutdown, we probably lost the foreground;
-      try to take it back. (Note: Application.BringToFront can't be used
-      because we have no visible forms, and MB_SETFOREGROUND doesn't make
-      the app's taskbar button blink.) }
-    SetForegroundWindow(Application.Handle);
     LoggedMsgBox(SetupMessages[msgErrorRestartingComputer], '', mbError,
       MB_OK, True, IDOK);
   end;
@@ -2448,9 +2417,6 @@ var
     NotifyNewLanguage: Integer;
   end;
 begin
-  { Hide the taskbar button }
-  SetWindowPos(Application.Handle, 0, 0, 0, 0, 0, SWP_NOSIZE or
-    SWP_NOMOVE or SWP_NOZORDER or SWP_NOACTIVATE or SWP_HIDEWINDOW);
   Cancelled := False;
   try
     Server := TSpawnServer.Create;
@@ -2471,11 +2437,8 @@ begin
     { If the user clicked Cancel on the dialog, halt with special exit code }
     if ExceptObject is EAbort then
       Cancelled := True
-    else begin
-      { Otherwise, re-show the taskbar button and re-raise }
-      ShowWindow(Application.Handle, SW_SHOW);
+    else
       raise;
-    end;
   end;
   if Cancelled then
     Halt(ecCancelledBeforeInstall);
@@ -2494,7 +2457,6 @@ begin
     except
       { In the unlikely event that something above raises an exception, handle
         it here so the right exit code will still be returned below }
-      ShowWindow(Application.Handle, SW_SHOW);
       Application.HandleException(nil);
     end;
   end;
@@ -2681,25 +2643,24 @@ var
 
   function HandleInitPassword(const NeedPassword: Boolean): Boolean;
   { Handles InitPassword and returns the updated value of NeedPassword }
-  { Also see Wizard.CheckPassword }
-  var
-    S: String;
-    PasswordOk: Boolean;
+  { Also see WizardForm.CheckPassword }
   begin
     Result := NeedPassword;
 
     if NeedPassword and (InitPassword <> '') then begin
-      PasswordOk := False;
-      S := InitPassword;
+      var PasswordOk := False;
+      var S := InitPassword;
+      var CryptKey: TSetupEncryptionKey;
+      GenerateEncryptionKey(S, SetupHeader.EncryptionKDFSalt, SetupHeader.EncryptionKDFIterations, CryptKey);
       if shPassword in SetupHeader.Options then
-        PasswordOk := TestPassword(S);
+        PasswordOk := TestPassword(CryptKey);
       if not PasswordOk and (CodeRunner <> nil) then
         PasswordOk := CodeRunner.RunBooleanFunctions('CheckPassword', [S], bcTrue, False, PasswordOk);
 
       if PasswordOk then begin
         Result := False;
         if shEncryptionUsed in SetupHeader.Options then
-          FileExtractor.CryptKey := S;
+          FileExtractor.CryptKey := CryptKey;
       end;
     end;
   end;
@@ -2710,14 +2671,6 @@ var
       InstallMode := imVerySilent
     else if InitSilent then
       InstallMode := imSilent;
-
-    if InstallMode <> imNormal then begin
-      if InstallMode = imVerySilent then begin
-        Application.ShowMainForm := False;
-        SetTaskbarButtonVisibility(False);
-      end;
-      SetupHeader.Options := SetupHeader.Options - [shWindowVisible];
-    end;
   end;
 
   function RecurseExternalGetSizeOfFiles(const DisableFsRedir: Boolean;
@@ -3253,6 +3206,7 @@ begin
     if UseRestartManager and (RmStartSession(@RmSessionHandle, 0, RmSessionKey) = ERROR_SUCCESS) then begin
       RmSessionStarted := True;
       SetStringsFromCommaString(CloseApplicationsFilterList, SetupHeader.CloseApplicationsFilter);
+      SetStringsFromCommaString(CloseApplicationsFilterExcludesList, SetupHeader.CloseApplicationsFilterExcludes);
     end;
   end;
 
@@ -3447,6 +3401,27 @@ begin
     end;
     Inc6464(MinimumSpace, MinimumTypeSpace);
   end;
+end;
+
+procedure InitializeWizard;
+begin
+  WizardForm := AppCreateForm(TWizardForm) as TWizardForm;
+  if CodeRunner <> nil then begin
+    try
+      CodeRunner.RunProcedures('InitializeWizard', [''], False);
+    except
+      Log('InitializeWizard raised an exception (fatal).');
+      raise;
+    end;
+  end;
+  WizardForm.FlipSizeAndCenterIfNeeded(False, nil, False);
+  WizardForm.SetCurPage(wpWelcome);
+  if InstallMode = imNormal then begin
+    WizardForm.ClickToStartPage; { this won't go past wpReady  }
+    WizardForm.Visible := True;
+  end
+  else
+    WizardForm.ClickThroughPages;
 end;
 
 procedure DeinitSetup(const AllowCustomSetupExitCode: Boolean);
@@ -3822,6 +3797,7 @@ initialization
   DeleteFilesAfterInstallList := TStringList.Create;
   DeleteDirsAfterInstallList := TStringList.Create;
   CloseApplicationsFilterList := TStringList.Create;
+  CloseApplicationsFilterExcludesList := TStringList.Create;
   WizardImages := TList.Create;
   WizardSmallImages := TList.Create;
   SHGetKnownFolderPathFunc := GetProcAddress(SafeLoadLibrary(AddBackslash(GetSystemDir) + shell32,
@@ -3829,6 +3805,7 @@ initialization
 
 finalization
   FreeWizardImages;
+  FreeAndNil(CloseApplicationsFilterExcludesList);
   FreeAndNil(CloseApplicationsFilterList);
   FreeAndNil(DeleteDirsAfterInstallList);
   FreeAndNil(DeleteFilesAfterInstallList);

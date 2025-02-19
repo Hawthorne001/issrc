@@ -6,8 +6,8 @@ unit Compression.LZMADecompressor;
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
-  Interface to the "new" LZMA/LZMA2 SDK decompression OBJs in lzma2\Decoder,
-  used by Setup.
+  Interface to the LZMA/LZMA2 SDK decompression OBJs in
+  Compression.LZMADecompressor\Lzma2Decode, used by Setup.
 }
 
 interface
@@ -94,9 +94,9 @@ const
   MaxDictionarySize = 1024 shl 20;  { 1 GB - same as ssLZMADictionarySize allows in Compile.pas }
 
 { Compiled by Visual Studio 2022 using compile.bat
-  To enable source debugging recompile using compile-bcc32c.bat }
+  To enable source debugging recompile using compile-bcc32c.bat
+  Note that in a speed test the code produced by bcc32c was about 33% slower }
 {$L Src\Compression.LZMADecompressor\Lzma2Decode\ISLzmaDec.obj}
-{$L Src\Compression.LZMADecompressor\Lzma2Decode\ISLzma2Dec.obj}
 
 function IS_LzmaDec_Init(var state: TLZMA1InternalDecoderState;
   stateSize: Cardinal; const props; propsSize: Cardinal;
@@ -117,14 +117,6 @@ function Lzma2Dec_DecodeToBuf(var state: TLZMA2InternalDecoderState; var dest;
   var status: Integer): TLZMASRes; cdecl; external name '_Lzma2Dec_DecodeToBuf';
 procedure IS_Lzma2Dec_Free(var state: TLZMA2InternalDecoderState;
   const alloc: TLZMAISzAlloc); cdecl; external name '_IS_Lzma2Dec_Free';
-
-procedure LzmaDec_Allocate; cdecl; external name '_LzmaDec_Allocate';
-procedure LzmaDec_AllocateProbs; cdecl; external name '_LzmaDec_AllocateProbs';
-procedure LzmaDec_DecodeToDic; cdecl; external name'_LzmaDec_DecodeToDic';
-procedure LzmaDec_FreeProbs; cdecl; external name '_LzmaDec_FreeProbs';
-procedure LzmaDec_Init; cdecl; external name '_LzmaDec_Init';
-procedure LzmaDec_InitDicAndState; cdecl; external name '_LzmaDec_InitDicAndState';
-procedure LzmaProps_Decode; cdecl; external name '_LzmaProps_Decode';
 
 function _memcpy(dest, src: Pointer; n: Cardinal): Pointer; cdecl;
 begin

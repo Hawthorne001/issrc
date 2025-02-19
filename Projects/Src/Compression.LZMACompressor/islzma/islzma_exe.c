@@ -10,8 +10,9 @@
   LZMA.pas revision 1.49.2.3.
 
   Intentional deviations from the original Pascal code:
-  - The WaitForMultipleObjects() calls in WakeMainAndWaitUntil and
-    BeginEncode additionally wait on ProcessData.ParentProcess.
+  - The WaitForMultipleObjects() calls in WakeMainAndWaitUntil,
+    CheckTerminateWorkerEvent, and BeginEncode additionally wait on
+    ProcessData.ParentProcess.
   Everything else *should* be 100% consistent.
 */
 
@@ -20,7 +21,7 @@
 #include "../../../../Components/Lzma2/7zTypes.h"
 #include "islzma.h"
 
-#define ISLZMA_EXE_VERSION 101
+#define ISLZMA_EXE_VERSION 102
 
 typedef BYTE Byte;
 typedef LONG Longint;
@@ -41,16 +42,14 @@ struct TLZMACompressorSharedEvents {
 	THandle32 StartEncodeEvent;
 	THandle32 EndWaitOnInputEvent;
 	THandle32 EndWaitOnOutputEvent;
-	THandle32 EndWaitOnProgressEvent;
 	THandle32 WorkerWaitingOnInputEvent;
 	THandle32 WorkerWaitingOnOutputEvent;
-	THandle32 WorkerHasProgressEvent;
 	THandle32 WorkerEncodeFinishedEvent;
 };
 
 struct TLZMACompressorSharedData {
+	volatile Int64 ProgressBytes;
 	volatile BOOL NoMoreInput;
-	volatile LongWord ProgressKB;
 	volatile SRes EncodeResult;
 	struct TLZMACompressorRingBuffer InputBuffer;
 	struct TLZMACompressorRingBuffer OutputBuffer;
@@ -70,7 +69,6 @@ static struct TLZMACompressorProcessData ProcessData;
 static struct TLZMACompressorSharedEvents *FEvents;
 static struct TLZMACompressorSharedData *FShared;
 static volatile LONG FReadLock, FWriteLock, FProgressLock;
-static volatile DWORD FLastProgressTick;
 
 static Longint RingBufferInternalWriteOrRead(struct TLZMACompressorRingBuffer *Ring,
 	const BOOL AWrite, Longint *Offset, void *Data, Longint Size)
@@ -96,12 +94,16 @@ static Longint RingBufferInternalWriteOrRead(struct TLZMACompressorRingBuffer *R
 			Bytes = (Longint)sizeof(Ring->Buf) - *Offset;
 		}
 
+		/* On a weakly-ordered CPU, the read of Count above must happen before
+		   Buf content is read below (otherwise the content could be stale) */
+		MemoryBarrier();
+
 		if (AWrite) {
 			memcpy(&Ring->Buf[*Offset], P, Bytes);
-			InterlockedExchangeAdd(&Ring->Count, Bytes);
+			InterlockedExchangeAdd(&Ring->Count, Bytes);  /* full barrier */
 		} else {
 			memcpy(P, &Ring->Buf[*Offset], Bytes);
-			InterlockedExchangeAdd(&Ring->Count, -Bytes);
+			InterlockedExchangeAdd(&Ring->Count, -Bytes);  /* full barrier */
 		}
 		if (*Offset + Bytes == sizeof(Ring->Buf)) {
 			*Offset = 0;
@@ -154,6 +156,24 @@ static HRESULT WakeMainAndWaitUntil(HANDLE AWakeEvent, HANDLE AWaitEvent)
 	}
 }
 
+static HRESULT CheckTerminateWorkerEvent(void)
+{
+	HANDLE H[2];
+
+	H[0] = THandle32ToHandle(FEvents->TerminateWorkerEvent);
+	H[1] = THandle32ToHandle(ProcessData.ParentProcess);
+	switch (WaitForMultipleObjects(2, H, FALSE, 0)) {
+		case WAIT_OBJECT_0 + 0:
+		case WAIT_OBJECT_0 + 1:
+			return E_ABORT;
+		case WAIT_TIMEOUT:
+			return S_OK;
+		default:
+			SetEvent(THandle32ToHandle(FEvents->TerminateWorkerEvent));
+			return E_FAIL;
+	}
+}
+
 static HRESULT FillBuffer(const BOOL AWrite, void *Data, size_t Size,
 	size_t *ProcessedSize)
 /* Called from worker thread (or a thread spawned by the worker thread) */
@@ -169,6 +189,15 @@ static HRESULT FillBuffer(const BOOL AWrite, void *Data, size_t Size,
 		if (AWrite) {
 			Bytes = RingBufferWrite(&FShared->OutputBuffer, P, LimitedSize);
 		} else {
+			if (FShared->NoMoreInput) {
+				/* If NoMoreInput=True and *then* we see that the input buffer is
+				   empty (ordering matters!), we know that all input has been
+				   processed and that the input buffer will stay empty */
+				MemoryBarrier();
+				if (FShared->InputBuffer.Count == 0) {
+					break;
+				}
+			}
 			Bytes = RingBufferRead(&FShared->InputBuffer, P, LimitedSize);
 		}
 		if (Bytes == 0) {
@@ -182,9 +211,6 @@ static HRESULT FillBuffer(const BOOL AWrite, void *Data, size_t Size,
 				}
 			} else {
 				/* Input buffer empty; wait for the main thread to fill it */
-				if (FShared->NoMoreInput) {
-					break;
-				}
 				Result = WakeMainAndWaitUntil(
 					THandle32ToHandle(FEvents->WorkerWaitingOnInputEvent),
 					THandle32ToHandle(FEvents->EndWaitOnInputEvent));
@@ -211,7 +237,7 @@ static HRESULT Read(void *Data, size_t Size, size_t *ProcessedSize)
 		return E_FAIL;
 	}
 	Result = FillBuffer(FALSE, Data, Size, ProcessedSize);
-	FReadLock = 0;
+	InterlockedExchange(&FReadLock, 0);
 
 	return Result;
 }
@@ -226,7 +252,7 @@ static HRESULT Write(const void *Data, size_t Size, size_t *ProcessedSize)
 		return E_FAIL;
 	}
 	Result = FillBuffer(TRUE, (void *)Data, Size, ProcessedSize);
-	FWriteLock = 0;
+	InterlockedExchange(&FWriteLock, 0);
 
 	return Result;
 }
@@ -234,32 +260,20 @@ static HRESULT Write(const void *Data, size_t Size, size_t *ProcessedSize)
 static HRESULT ProgressMade(const UInt64 TotalBytesProcessed)
 /* Called from worker thread (or a thread spawned by the worker thread) */
 {
-	DWORD T;
-	UInt64 KBProcessed;
 	HRESULT Result;
 
-	T = GetTickCount();
-	if (T - FLastProgressTick >= 100) {
-		/* Sanity check: Make sure we're the only thread inside Progress */
-		if (InterlockedExchange(&FProgressLock, 1) != 0) {
-			return E_FAIL;
-		}
-		FLastProgressTick = T;
-		/* Make sure TotalBytesProcessed isn't negative. LZMA's Types.h says
-		   "-1 for size means unknown value", though I don't see any place
-		   where LzmaEnc actually does call Progress with inSize = -1. */
-		if ((Int64)TotalBytesProcessed >= 0) {
-			KBProcessed = TotalBytesProcessed;
-			KBProcessed /= 1024;
-			FShared->ProgressKB = (LongWord)KBProcessed;
-		}
-		Result = WakeMainAndWaitUntil(
-			THandle32ToHandle(FEvents->WorkerHasProgressEvent),
-			THandle32ToHandle(FEvents->EndWaitOnProgressEvent));
-		FProgressLock = 0;
-	} else {
-		Result = S_OK;
+	/* Sanity check: Make sure we're the only thread inside Progress */
+	if (InterlockedExchange(&FProgressLock, 1) != 0) {
+		return E_FAIL;
 	}
+	/* An Interlocked function is used to ensure the 64-bit value is written
+	   atomically (not with two separate 32-bit writes).
+	   TLZMACompressor will ignore negative values. LZMA SDK's 7zTypes.h says
+	   "-1 for size means unknown value", though I don't see any place
+	   where LzmaEnc actually does call Progress with inSize = -1. */
+	InterlockedExchange64(&FShared->ProgressBytes, (Int64)TotalBytesProcessed);
+	Result = CheckTerminateWorkerEvent();
+	InterlockedExchange(&FProgressLock, 0);
 
 	return Result;
 }

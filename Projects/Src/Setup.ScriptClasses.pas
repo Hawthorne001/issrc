@@ -202,14 +202,6 @@ begin
   end;
 end;
 
-procedure RegisterMainForm_R(Cl: TPSRuntimeClassImporter);
-begin
-  with CL.Add(TMainForm) do
-  begin
-    RegisterMethod(@TMainForm.ShowAboutBox, 'ShowAboutBox');
-  end;
-end;
-
 procedure RegisterWizardForm_R(Cl: TPSRuntimeClassImporter);
 begin
   with Cl.Add(TWizardForm) do
@@ -343,6 +335,17 @@ begin
   end;
 end;
 
+procedure RegisterExtractionWizardPage_R(CL: TPSRuntimeClassImporter);
+begin
+  with CL.Add(TExtractionWizardPage) do
+  begin
+    RegisterMethod(@TExtractionWizardPage.Add, 'Add');
+    RegisterMethod(@TExtractionWizardPage.Clear, 'Clear');
+    RegisterMethod(@TExtractionWizardPage.Extract, 'Extract');
+    RegisterMethod(@TExtractionWizardPage.Show, 'Show');
+  end;
+end;
+
 procedure RegisterHandCursor_R(Cl: TPSRuntimeClassImporter);
 const
   IDC_HAND = MakeIntResource(32649);
@@ -433,7 +436,6 @@ begin
 
     RegisterUIStateForm_R(Cl);
     RegisterSetupForm_R(Cl);
-    RegisterMainForm_R(Cl);
     RegisterWizardForm_R(Cl);
     RegisterUninstallProgressForm_R(Cl);
 
@@ -447,6 +449,7 @@ begin
     RegisterOutputProgressWizardPage_R(Cl);
     RegisterOutputMarqueeProgressWizardPage_R(Cl);
     RegisterDownloadWizardPage_R(Cl);
+    RegisterExtractionWizardPage_R(Cl);
 
     RegisterHandCursor_R(Cl);
 
@@ -462,7 +465,6 @@ end;
 procedure ScriptClassesLibraryUpdateVars(ScriptInterpreter: TIFPSExec);
 begin
   SetVariantToClass(ScriptInterpreter.GetVarNo(ScriptInterpreter.GetVar('WIZARDFORM')), WizardForm);
-  SetVariantToClass(ScriptInterpreter.GetVarNo(ScriptInterpreter.GetVar('MAINFORM')), MainForm);
   SetVariantToClass(ScriptInterpreter.GetVarNo(ScriptInterpreter.GetVar('UNINSTALLPROGRESSFORM')), UninstallProgressForm);
 end;
 

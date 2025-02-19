@@ -1,8 +1,8 @@
 Inno Setup
 ==========
 
-Copyright (C) 1997-2024 Jordan Russell. All rights reserved.
-Portions Copyright (C) 2000-2024 Martijn Laan. All rights reserved.
+Copyright (C) 1997-2025 Jordan Russell. All rights reserved.
+Portions Copyright (C) 2000-2025 Martijn Laan. All rights reserved.
 For conditions of distribution and use, see LICENSE.TXT.
 
 Source code README
@@ -40,12 +40,6 @@ Getting Started
 
    We compile all of Inno Setup's projects under Delphi 11.3 Alexandria.
 
-   If you do not have access to this version of Delphi, you should be
-   able to compile the projects on other versions, however complete
-   compatibility is NOT guaranteed. We try to make Inno Setup compilable on
-   the other versions when possible, but do not have the resources to test
-   every change on every Delphi version.
-  
    There's a free version of Delphi available called the Community Edition.
    See https://www.embarcadero.com/products/delphi/starter/free-download.
 
@@ -168,9 +162,9 @@ Source code tips
   
 - When building the projects in Release mode it outputs to [Files].
   
-- All of the forms in the Setup project, with the exception of Setup.MainForm.dfm, have
-  Scaled set to False. This is because they dynamically scale themselves at
-  run-time by calling a function named InitializeFont.
+- All of the forms in the Setup project have Scaled set to False. This is
+  because they dynamically scale themselves at run-time by calling a function
+  named InitializeFont.
 
 - A note for those curious: The Setup Compiler creates single EXE Setups by
   first creating the SETUP.EXE as usual, then concatenating the SETUP.0 and
@@ -207,11 +201,14 @@ code in the isscint repository.
 Compiled by Visual Studio 2005 from the [Projects\Src\Setup.HelperEXEs\Helper] directory and then
 stored in a compiled resource file.
 
-**Projects\Src\Compression.LZMADecompressor\Lzma2Decode\ISLzmaDec.obj**, **Projects\Src\Compression.LZMADecompressor\Lzma2Decode\ISLzma2Dec.obj** -
+**Projects\Src\Compression.LZMADecompressor\Lzma2Decode\ISLzmaDec.obj** -
 Compiled by Visual Studio 2022 from the [Projects\Src\Compression.LZMADecompressor\Lzma2Decode] directory.
 
 **Projects\Src\Compression.LZMA1SmallDecompressor\LzmaDecode\LzmaDecodeInno.obj** -
 Compiled by Visual Studio 2022 from the [Projects\Src\Compression.LZMA1SmallDecompressor\LzmaDecode] directory.
+
+**Projects\Src\Compression.SevenZipDecoder\7zDecode\IS7zDec.obj** -
+Compiled by Visual Studio 2022 from the [Projects\Src\Compression.SevenZipDecoder\7zDecode] directory.
 
 **Examples\MyProg.exe**, **Examples\MyProg-x64.exe**, **Examples\MyProg-Arm64.exe** -
 Compiled by Visual Studio 2022 from the [Examples\MyProg] directory.
@@ -276,5 +273,6 @@ workflow will be triggered automatically.
 [Projects\Src\Compil32]: <Projects/Src/Compil32>
 [Projects\Src\Compression.LZMADecompressor\Lzma2Decode]: <Projects/Src/Compression.LZMADecompressor/Lzma2Decode>
 [Projects\Src\Compression.LZMA1SmallDecompressor\LzmaDecode]: <Projects/Src/Compression.LZMA1SmallDecompressor/LzmaDecode>
+[Projects\Src\Compression.SevenZipDecoder\7zDecode]: <Projects/Src/Compression.SevenZipDecoder/7zDecode>
 [7-Zip]: https://www.7-zip.org/
 [secret]: https://docs.github.com/en/actions/security-guides/encrypted-secrets

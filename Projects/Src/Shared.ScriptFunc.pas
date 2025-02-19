@@ -14,7 +14,7 @@ interface
 type
   TScriptFuncTableID = (sftScriptDlg, sftNewDiskForm, sftBrowseFunc, sftCommonFuncVcl,
     sftCommonFunc, sftInstall, sftInstFunc, sftInstFuncOle, sftMainFunc, sftMessages,
-    sftSystem, sftSysUtils, sftVerInfoFunc, sftWindows, sftOle2, sftLoggingFunc,
+    sftSystem, sftSysUtils, sftVerInfoFunc, sftWindows, sftActiveX, sftLoggingFunc,
     sftOther);
   TScriptTable = array of AnsiString;
 
@@ -221,6 +221,7 @@ initialization
     'function CreateOutputProgressPage(const ACaption, ADescription: String): TOutputProgressWizardPage;',
     'function CreateOutputMarqueeProgressPage(const ACaption, ADescription: String): TOutputMarqueeProgressWizardPage;',
     'function CreateDownloadPage(const ACaption, ADescription: String; const OnDownloadProgress: TOnDownloadProgress): TDownloadWizardPage;',
+    'function CreateExtractionPage(const ACaption, ADescription: String; const OnExtractionProgress: TOnExtractionProgress): TExtractionWizardPage;',
     'function ScaleX(X: Integer): Integer;',
     'function ScaleY(Y: Integer): Integer;',
     'function CreateCustomForm: TSetupForm;'
@@ -399,8 +400,6 @@ initialization
     'function CustomMessage(const MsgName: String): String;',
     'function RmSessionStarted: Boolean;',
     'function RegisterExtraCloseApplicationsResource(const DisableFsRedir: Boolean; const AFilename: String): Boolean;',
-    { Actually access MainForm.pas }
-    'function GetMainForm: TMainForm;',
     { Actually access WizardForm.pas }
     'function GetWizardForm: TWizardForm;',
     'function WizardIsComponentSelected(const Components: String): Boolean;',
@@ -490,7 +489,7 @@ initialization
     'procedure CharToOemBuff(var S: AnsiString);'
   ];
 
-  ScriptFuncTables[sftOle2] :=
+  ScriptFuncTables[sftActiveX] :=
   [
     'procedure CoFreeUnusedLibraries;'
   ];
@@ -538,7 +537,12 @@ initialization
     'function CreateCallback(Method: AnyMethod): Longword;',
     'function IsDotNetInstalled(const MinVersion: TDotNetVersion; const MinServicePack: Cardinal): Boolean;',
     'function IsMsiProductInstalled(const UpgradeCode: String; const PackedMinVersion: Int64): Boolean;',
-    'function InitializeBitmapImageFromIcon(const BitmapImage: TBitmapImage; const IconFilename: String; const BkColor: TColor; const AscendingTrySizes: TArrayOfInteger): Boolean;'
+    'function InitializeBitmapImageFromIcon(const BitmapImage: TBitmapImage; const IconFilename: String; const BkColor: TColor; const AscendingTrySizes: TArrayOfInteger): Boolean;',
+    'procedure Extract7ZipArchive(const ArchiveFileName, DestDir: String; const FullPaths: Boolean; const OnExtractionProgress: TOnExtractionProgress);',
+    'function Debugging: Boolean;',
+    'function StringJoin(const Separator: String; const Values: TArrayOfString): String;',
+    'function StringSplit(const S: String; const Separators: TArrayOfString; const Typ: TSplitType): TArrayOfString;',
+    'function StringSplitEx(const S: String; const Separators: TArrayOfString; const Quote: Char; const Typ: TSplitType): TArrayOfString;'
   ];
 
   {$IFDEF COMPIL32PROJ}

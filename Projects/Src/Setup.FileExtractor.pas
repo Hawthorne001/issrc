@@ -28,12 +28,14 @@ type
     FNeedReset: Boolean;
     FChunkCompressed, FChunkEncrypted: Boolean;
     FCryptContext: TChaCha20Context;
-    FCryptKey: String;
+    FCryptKey: TSetupEncryptionKey;
+    FCryptKeySet: Boolean;
     FEntered: Integer;
     procedure DecompressBytes(var Buffer; Count: Cardinal);
     class function FindSliceFilename(const ASlice: Integer): String;
     procedure OpenSlice(const ASlice: Integer);
     function ReadProc(var Buf; Count: Longint): Longint;
+    procedure SetCryptKey(const Value: TSetupEncryptionKey);
   public
     constructor Create(ADecompressorClass: TCustomDecompressorClass);
     destructor Destroy; override;
@@ -41,7 +43,7 @@ type
       const ProgressProc: TExtractorProgressProc; const VerifyChecksum: Boolean);
     procedure SeekTo(const FL: TSetupFileLocationEntry;
       const ProgressProc: TExtractorProgressProc);
-    property CryptKey: String write FCryptKey;
+    property CryptKey: TSetupEncryptionKey write SetCryptKey;
   end;
 
 function FileExtractor: TFileExtractor;
@@ -50,9 +52,9 @@ procedure FreeFileExtractor;
 implementation
 
 uses
-  Hash, PathFunc, Shared.CommonFunc, Setup.MainFunc, SetupLdrAndSetup.Messages,
+  PathFunc, Shared.CommonFunc, Setup.MainFunc, SetupLdrAndSetup.Messages,
   Shared.SetupMessageIDs, Setup.InstFunc, Compression.Zlib, Compression.bzlib,
-  Compression.LZMADecompressor, SHA1, Setup.LoggingFunc, Setup.NewDiskForm;
+  Compression.LZMADecompressor, SHA256, Setup.LoggingFunc, Setup.NewDiskForm;
 
 var
   FFileExtractor: TFileExtractor;
@@ -100,13 +102,19 @@ begin
   inherited;
 end;
 
+procedure TFileExtractor.SetCryptKey(const Value: TSetupEncryptionKey);
+begin
+  FCryptKey := Value;
+  FCryptKeySet := True;
+end;
+
 var
   LastSourceDir: String;
 
 class function TFileExtractor.FindSliceFilename(const ASlice: Integer): String;
 var
   Major, Minor: Integer;
-  Prefix, F1, F2, Path: String;
+  Prefix, F1, Path: String;
 begin
   Prefix := PathChangeExt(PathExtractName(SetupLdrOriginalFilename), '');
   Major := ASlice div SetupHeader.SlicesPerDisk + 1;
@@ -115,21 +123,14 @@ begin
     F1 := Format('%s-%d.bin', [Prefix, Major])
   else
     F1 := Format('%s-%d%s.bin', [Prefix, Major, Chr(Ord('a') + Minor)]);
-  F2 := Format('..\DISK%d\', [Major]) + F1;
   if LastSourceDir <> '' then begin
     Result := AddBackslash(LastSourceDir) + F1;
     if NewFileExists(Result) then Exit;
   end;
   Result := AddBackslash(SourceDir) + F1;
   if NewFileExists(Result) then Exit;
-  if LastSourceDir <> '' then begin
-    Result := PathExpand(AddBackslash(LastSourceDir) + F2);
-    if NewFileExists(Result) then Exit;
-  end;
-  Result := PathExpand(AddBackslash(SourceDir) + F2);
-  if NewFileExists(Result) then Exit;
   Path := SourceDir;
-  LogFmt('Asking user for new disk containing "%s".', [F1]);  
+  LogFmt('Asking user for new disk containing "%s".', [F1]);
   if SelectDisk(Major, F1, Path) then begin
     LastSourceDir := Path;
     Result := AddBackslash(Path) + F1;
@@ -190,15 +191,12 @@ procedure TFileExtractor.SeekTo(const FL: TSetupFileLocationEntry;
 
   procedure InitDecryption;
   begin
-    { Initialize the key, which is the SHA-256 hash of FCryptKey }
-    var Key := THashSHA2.GetHashBytes(FCryptKey, SHA256);
-
     { Recreate the unique nonce from the base nonce }
     var Nonce := SetupHeader.EncryptionBaseNonce;
     Nonce.RandomXorStartOffset := Nonce.RandomXorStartOffset xor FChunkStartOffset;
     Nonce.RandomXorFirstSlice := Nonce.RandomXorFirstSlice xor FChunkFirstSlice;
 
-    XChaCha20Init(FCryptContext, Key[0], Length(Key), Nonce, SizeOf(Nonce), 0);
+    XChaCha20Init(FCryptContext, FCryptKey[0], Length(FCryptKey), Nonce, SizeOf(Nonce), 0);
   end;
 
   procedure Discard(Count: Integer64);
@@ -232,7 +230,7 @@ begin
     InternalError('Cannot call file extractor recursively');
   Inc(FEntered);
   try
-    if (foChunkEncrypted in FL.Flags) and (FCryptKey = '') then
+    if (foChunkEncrypted in FL.Flags) and not FCryptKeySet then
       InternalError('Cannot read an encrypted file before the key has been set');
 
     { Is the file in a different chunk than the current one?
@@ -294,7 +292,7 @@ begin
 
     { Decrypt the data after reading from the file }
     if FChunkEncrypted then
-      ChaCha20Crypt(FCryptContext, Buffer^, Buffer^, Res);
+      XChaCha20Crypt(FCryptContext, Buffer^, Buffer^, Res);
 
     if Left = Res then
       Break
@@ -315,7 +313,7 @@ procedure TFileExtractor.DecompressFile(const FL: TSetupFileLocationEntry;
   const VerifyChecksum: Boolean);
 var
   BytesLeft: Integer64;
-  Context: TSHA1Context;
+  Context: TSHA256Context;
   AddrOffset: LongWord;
   BufSize: Cardinal;
   Buf: array[0..65535] of Byte;
@@ -334,7 +332,7 @@ begin
     DestF.Truncate;
     DestF.Seek(0);
 
-    SHA1Init(Context);
+    SHA256Init(Context);
 
     try
       AddrOffset := 0;
@@ -351,7 +349,7 @@ begin
           Inc(AddrOffset, BufSize);  { may wrap, but OK }
         end;
         Dec64(BytesLeft, BufSize);
-        SHA1Update(Context, Buf, BufSize);
+        SHA256Update(Context, Buf, BufSize);
         DestF.WriteBuffer(Buf, BufSize);
 
         if Assigned(ProgressProc) then
@@ -362,8 +360,8 @@ begin
         SourceIsCorrupted(E.Message);
     end;
 
-    if VerifyChecksum and not SHA1DigestsEqual(SHA1Final(Context), FL.SHA1Sum) then
-      SourceIsCorrupted('SHA-1 hash mismatch');
+    if VerifyChecksum and not SHA256DigestsEqual(SHA256Final(Context), FL.SHA256Sum) then
+      SourceIsCorrupted('SHA-256 hash mismatch');
   finally
     Dec(FEntered);
   end;

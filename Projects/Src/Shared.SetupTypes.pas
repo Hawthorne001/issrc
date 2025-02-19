@@ -7,19 +7,12 @@ unit Shared.SetupTypes;
   For conditions of distribution and use, see LICENSE.TXT.
 
   Types and functions used by both ISCmplr-only and Setup-only units
-
-  Also used by Compil32, for autocompletion only
 }
 
 interface
 
 uses
   SysUtils, Classes, Shared.Struct;
-
-type
-  TSetupStep = (ssPreInstall, ssInstall, ssPostInstall, ssDone);
-
-  TUninstallStep = (usAppMutexCheck, usUninstall, usPostUninstall, usDone);
 
 const
   { Predefined page identifiers }
@@ -41,12 +34,12 @@ const
 type
   TInstallOnThisVersionResult = (irInstall, irNotOnThisPlatform,
     irVersionTooLow, irServicePackTooLow, irVerTooHigh);
-    
+
   TRenamedConstantCallBack = procedure(const Cnst, CnstRenamed: String) of object;
 
 const
   crHand = 1;
-  
+
   CodeRootKeyFlagMask  = $7F000000;
   CodeRootKeyFlag32Bit = $01000000;
   CodeRootKeyFlag64Bit = $02000000;
@@ -58,11 +51,13 @@ function StringsToCommaString(const Strings: TStrings): String;
 procedure SetStringsFromCommaString(const Strings: TStrings; const Value: String);
 function StrToSetupVersionData(const S: String; var VerData: TSetupVersionData): Boolean;
 procedure HandleRenamedConstants(var Cnst: String; const RenamedConstantCallback: TRenamedConstantCallback);
+procedure GenerateEncryptionKey(const Password: String; const Salt: TSetupKDFSalt;
+  const Iterations: Integer; out Key: TSetupEncryptionKey);
 
 implementation
 
 uses
-  Shared.CommonFunc;
+  PBKDF2, Shared.CommonFunc;
 
 function QuoteStringIfNeeded(const S: String): String;
 { Used internally by StringsToCommaString. Adds quotes around the string if
@@ -297,6 +292,18 @@ begin
       RenamedConstantCallback(Cnst, CnstRenamed);
     Cnst := CnstRenamed;
   end;
+end;
+
+procedure GenerateEncryptionKey(const Password: String; const Salt: TSetupKDFSalt;
+  const Iterations: Integer; out Key: TSetupEncryptionKey);
+begin
+  var SaltBytes: TBytes;
+  var SaltSize := SizeOf(Salt);
+  SetLength(SaltBytes, SaltSize);
+  Move(Salt[0], SaltBytes[0], SaltSize);
+  var KeyLength := SizeOf(Key);
+  var KeyBytes := PBKDF2SHA256(Password, SaltBytes, Iterations, KeyLength);
+  Move(KeyBytes[0], Key[0], KeyLength);
 end;
 
 end.

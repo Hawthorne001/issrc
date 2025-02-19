@@ -43,6 +43,7 @@ function IsWindows11: Boolean;
 function GetDefaultThemeType: TThemeType;
 function GetDefaultKeyMappingType: TKeyMappingType;
 function GetDefaultMemoKeyMappingType: TIDEScintKeyMappingType;
+procedure LaunchFileOrURL(const AFilename: String; const AParameters: String = '');
 procedure OpenDonateSite;
 procedure OpenMailingListSite;
 procedure ClearMRUList(const MRUList: TStringList; const Section: String);
@@ -76,8 +77,6 @@ function GetSourcePath(const AFilename: String): String;
 function ReadScriptLines(const ALines: TStringList; const ReadFromFile: Boolean;
   const ReadFromFileFilename: String; const NotReadFromFileMemo: TScintEdit): Integer;
 function CreateBitmapInfo(const Width, Height, BitCount: Integer): TBitmapInfo;
-function GetWordOccurrenceFindOptions: TScintFindOptions;
-function GetSelTextOccurrenceFindOptions: TScintFindOptions;
 function GetPreferredMemoFont: String;
 function DoubleAmp(const S: String): String;
 
@@ -86,7 +85,7 @@ implementation
 uses
   ActiveX, ShlObj, ShellApi, CommDlg, SysUtils, IOUtils, StrUtils,
   Messages, DwmApi, Consts,
-  Shared.CommonFunc, PathFunc, Shared.FileClass, NewUxTheme,
+  Shared.CommonFunc, Shared.CommonFunc.Vcl, PathFunc, Shared.FileClass, NewUxTheme,
   IDE.MainForm, IDE.Messages, Shared.ConfigIniFile;
 
 procedure InitFormFont(Form: TForm);
@@ -284,16 +283,37 @@ begin
   Result := kmtDefault;
 end;
 
+procedure LaunchFileOrURL(const AFilename: String; const AParameters: String = '');
+begin
+  { SEE_MASK_FLAG_NO_UI isn't used, so error dialogs are possible }
+  const OwnerWnd = GetOwnerWndForMessageBox;
+  const WindowList = DisableTaskWindows(OwnerWnd);
+  try
+    const Dir = GetSystemDir;
+    var Info: TShellExecuteInfo;
+    FillChar(Info, SizeOf(Info), 0);
+    Info.cbSize := SizeOf(Info);
+    Info.fMask := SEE_MASK_NOASYNC;
+    Info.Wnd := OwnerWnd;
+    Info.lpVerb := 'open';
+    Info.lpFile := PChar(AFilename);
+    Info.lpParameters := PChar(AParameters);
+    Info.lpDirectory := PChar(Dir);
+    Info.nShow := SW_SHOWNORMAL;
+    ShellExecuteEx(@Info);
+  finally
+    EnableTaskWindows(WindowList);
+  end;
+end;
+
 procedure OpenDonateSite;
 begin
-  ShellExecute(Application.Handle, 'open', 'https://jrsoftware.org/isdonate.php', nil,
-    nil, SW_SHOWNORMAL);
+  LaunchFileOrURL('https://jrsoftware.org/isdonate.php');
 end;
 
 procedure OpenMailingListSite;
 begin
-  ShellExecute(Application.Handle, 'open', 'https://jrsoftware.org/ismail.php', nil,
-    nil, SW_SHOWNORMAL);
+  LaunchFileOrURL('https://jrsoftware.org/ismail.php');
 end;
 
 procedure ClearMRUList(const MRUList: TStringList; const Section: String);
@@ -472,7 +492,7 @@ end;
 function NewShortCutToText(const ShortCut: TShortCut): String;
 { This function is better than Delphi's ShortCutToText function because it works
   for dead keys. A dead key is a key which waits for the user to press another
-  key so it can be combined. For example `+e=è. Pressing space after a dead key
+  key so it can be combined. For example `+e=Ã¨. Pressing space after a dead key
   produces the dead key char itself. For example `+space=`. }
 const
   { List of chars ShortCutToText knows about and doesn't rely on Win32's
@@ -846,16 +866,6 @@ begin
   Result.bmiHeader.biPlanes := 1;
   Result.bmiHeader.biBitCount := BitCount;
   Result.bmiHeader.biCompression := BI_RGB;
-end;
-
-function GetWordOccurrenceFindOptions: TScintFindOptions;
-begin
-  Result := [sfoMatchCase, sfoWholeWord];
-end;
-
-function GetSelTextOccurrenceFindOptions: TScintFindOptions;
-begin
-  Result := [];
 end;
 
 var

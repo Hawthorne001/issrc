@@ -60,12 +60,11 @@ uses
   Shared.TaskDialogFunc in 'Src\Shared.TaskDialogFunc.pas',
   IDE.RegistryDesignerForm in 'Src\IDE.RegistryDesignerForm.pas' {RegistryDesignerForm},
   IDE.Wizard.WizardFormRegistryHelper in 'Src\IDE.Wizard.WizardFormRegistryHelper.pas',
-  MD5 in '..\Components\MD5.pas',
   ScintInt.InnoSetup in '..\Components\ScintInt.InnoSetup.pas',
   Shared.ScriptFunc in 'Src\Shared.ScriptFunc.pas',
-  Shared.SetupTypes in 'Src\Shared.SetupTypes.pas',
+  Shared.SetupSteps in 'Src\Shared.SetupSteps.pas',
   Shared.Struct in 'Src\Shared.Struct.pas',
-  SHA1 in '..\Components\SHA1.pas',
+  SHA256 in '..\Components\SHA256.pas',
   Shared.DotNetVersion in 'Src\Shared.DotNetVersion.pas',
   isxclasses_wordlists_generated in '..\ISHelp\isxclasses_wordlists_generated.pas',
   IDE.ImagesModule in 'Src\IDE.ImagesModule.pas' {ImagesModule: TDataModule};
@@ -183,7 +182,7 @@ begin
     end
     else if CompareText(S, '/UNASSOC') = 0 then begin
       try
-        UnregisterISSFileAssociation;
+        UnregisterISSFileAssociation(True);
       except
         MessageBox(0, PChar(GetExceptMessage), nil, MB_OK or MB_ICONSTOP);
         Halt(2);
@@ -201,6 +200,10 @@ begin
 end;
 
 begin
+  {$IFDEF DEBUG}
+  ReportMemoryLeaksOnShutdown := True;
+  {$ENDIF}
+
   InitialCurDir := GetCurrentDir;
   if not SetCurrentDir(PathExtractDir(NewParamStr(0))) then
     SetCurrentDir(GetSystemDir);
@@ -210,6 +213,9 @@ begin
   Application.Initialize;
   CheckParams;
   RegisterApplicationRestart;
+
+  if not CommandLineWizard then
+    Application.MainFormOnTaskBar := True;
 
   { The 'with' is so that the Delphi IDE doesn't mess with these }
   with Application do begin

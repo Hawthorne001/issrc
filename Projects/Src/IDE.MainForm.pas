@@ -2,7 +2,7 @@
 
 {
   Inno Setup
-  Copyright (C) 1997-2024 Jordan Russell
+  Copyright (C) 1997-2025 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -79,6 +79,15 @@ type
     CurrentCallTip: Integer;
     MaxCallTips: Integer;
   end;
+
+  TUpdatePanelMessage = class
+    Msg, ConfigIdent: String;
+    ConfigValue: Integer;
+    Color: TColor;
+    constructor Create(const AMsg, AConfigIdent: String; const AConfigValue: Integer; const AColor: TColor);
+  end;
+
+  TUpdatePanelMessages = TObjectList<TUpdatePanelMessage>;
 
   TMainForm = class(TUIStateForm)
     MainMenu1: TMainMenu;
@@ -415,6 +424,7 @@ type
       CursorPastEOL: Boolean;
       TabWidth: Integer;
       UseTabCharacter: Boolean;
+      ShowWhiteSpace: Boolean;
       UseFolding: Boolean;
       FindRegEx: Boolean;
       WordWrap: Boolean;
@@ -465,8 +475,8 @@ type
     FBuildAnimationFrame: Cardinal;
     FLastAnimationTick: DWORD;
     FProgress, FProgressMax: Cardinal;
+    FTaskbarProgressValue: Cardinal;
     FProgressThemeData: HTHEME;
-    FProgressChunkSize, FProgressSpaceSize: Integer;
     FMenuThemeData: HTHEME;
     FToolbarThemeData: HTHEME;
     FMenuDarkBackgroundBrush: TBrush;
@@ -490,9 +500,11 @@ type
     FFirstTabSelectShortCut, FLastTabSelectShortCut: TShortCut;
     FCompileShortCut2: TShortCut;
     FCallTipState: TCallTipState;
+    FUpdatePanelMessages: TUpdatePanelMessages;
     function AnyMemoHasBreakPoint: Boolean;
     class procedure AppOnException(Sender: TObject; E: Exception);
     procedure AppOnActivate(Sender: TObject);
+    class procedure AppOnGetActiveFormHandle(var AHandle: HWND);
     procedure AppOnIdle(Sender: TObject; var Done: Boolean);
     function AskToDetachDebugger: Boolean;
     procedure BringToForeground;
@@ -510,15 +522,16 @@ type
     function DestroyLineState(const AMemo: TIDEScintFileEdit): Boolean;
     procedure DestroyDebugInfo;
     procedure DetachDebugger;
-    function EvaluateConstant(const S: String; var Output: String): Integer;
+    function EvaluateConstant(const S: String; out Output: String): Integer;
     function EvaluateVariableEntry(const DebugEntry: PVariableDebugEntry;
-      var Output: String): Integer;
+      out Output: String): Integer;
     procedure FindNext(const ReverseDirection: Boolean);
     function FindSetupDirectiveValue(const DirectiveName,
       DefaultValue: String): String; overload;
     function FindSetupDirectiveValue(const DirectiveName: String;
       DefaultValue: Boolean): Boolean; overload;
     function FromCurrentPPI(const XY: Integer): Integer;
+    function GetBorderStyle: TFormBorderStyle;
     procedure Go(AStepMode: TStepMode);
     procedure HideError;
     procedure InitializeFindText(Dlg: TFindDialog);
@@ -552,6 +565,7 @@ type
     function MemoToTabIndex(const AMemo: TIDEScintEdit): Integer;
     procedure MemoUpdateUI(Sender: TObject; Updated: TScintEditUpdates);
     procedure MemoZoom(Sender: TObject);
+    function MultipleSelectionPasteFromClipboard(const AMemo: TIDESCintEdit): Boolean;
     procedure UpdateReopenTabMenu(const Menu: TMenuItem);
     procedure ModifyMRUMainFilesList(const AFilename: String; const AddNewItem: Boolean);
     procedure ModifyMRUParametersList(const AParameter: String; const AddNewItem: Boolean);
@@ -573,6 +587,7 @@ type
     procedure ResetAllMemosLineState;
     procedure StartProcess;
     function SaveFile(const AMemo: TIDEScintFileEdit; const SaveAs: Boolean): Boolean;
+    procedure SetBorderStyle(Value: TFormBorderStyle);
     procedure SetErrorLine(const AMemo: TIDEScintFileEdit; const ALine: Integer);
     procedure SetStatusPanelVisible(const AVisible: Boolean);
     procedure SetStepLine(const AMemo: TIDEScintFileEdit; ALine: Integer);
@@ -608,6 +623,7 @@ type
     procedure UpdateRunMenu;
     procedure UpdateSaveMenuItemAndButton;
     procedure UpdateTargetMenu;
+    procedure UpdateUpdatePanel;
     procedure UpdateKeyMapping;
     procedure UpdateTheme;
     procedure UpdateThemeData(const Open: Boolean);
@@ -645,6 +661,8 @@ type
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
     function IsShortCut(var Message: TWMKey): Boolean; override;
+  published
+    property BorderStyle: TFormBorderStyle read GetBorderStyle write SetBorderStyle;
   end;
 
 var
@@ -690,6 +708,17 @@ const
 
   LineStateGrowAmount = 4000;
 
+{ TUpdatePanelMessage }
+
+constructor TUpdatePanelMessage.Create(const AMsg, AConfigIdent: String;
+  const AConfigValue: Integer; const AColor: TColor);
+begin
+  Msg := AMsg;
+  ConfigIdent := AConfigIdent;
+  ConfigValue := AConfigValue;
+  Color := AColor;
+end;
+
 { TMainFormPopupMenu }
 
 type
@@ -727,8 +756,6 @@ end;
 function TMainForm.InitializeMemoBase(const Memo: TIDEScintEdit; const PopupMenu: TPopupMenu): TIDEScintEdit;
 begin
   Memo.Align := alClient;
-  Memo.AutoCompleteFontName := Font.Name;
-  Memo.AutoCompleteFontSize := Font.Size;
   Memo.Font.Name := GetPreferredMemoFont; { Default font only, see ReadConfig }
   Memo.Font.Size := 10;
   Memo.ShowHint := True;
@@ -782,6 +809,14 @@ end;
 
 constructor TMainForm.Create(AOwner: TComponent);
 
+  procedure CheckUpdatePanelMessage(const Ini: TConfigIniFile; const ConfigIdent: String;
+    const ConfigValueDefault, ConfigValueMinimum: Integer; const Msg: String; const Color: TColor);
+  begin
+    var ConfigValue := Ini.ReadInteger('UpdatePanel', ConfigIdent, ConfigValueDefault);
+    if ConfigValue < ConfigValueMinimum then
+      FUpdatePanelMessages.Add(TUpdatePanelMessage.Create(Msg, ConfigIdent, ConfigValueMinimum, Color));
+  end;
+
   procedure ReadConfig;
   var
     Ini: TConfigIniFile;
@@ -815,6 +850,7 @@ constructor TMainForm.Create(AOwner: TComponent);
       FOptions.CursorPastEOL := Ini.ReadBool('Options', 'EditorCursorPastEOL', False);
       FOptions.TabWidth := Ini.ReadInteger('Options', 'TabWidth', 2);
       FOptions.UseTabCharacter := Ini.ReadBool('Options', 'UseTabCharacter', False);
+      FOptions.ShowWhiteSpace := Ini.ReadBool('Options', 'ShowWhiteSpace', False);
       FOptions.UseFolding := Ini.ReadBool('Options', 'UseFolding', True);
       FOptions.FindRegEx := Ini.ReadBool('Options', 'FindRegEx', False);
       FOptions.WordWrap := Ini.ReadBool('Options', 'WordWrap', False);
@@ -833,7 +869,7 @@ constructor TMainForm.Create(AOwner: TComponent);
       if (I >= 0) and (I <= Ord(High(TThemeType))) then
         FOptions.ThemeType := TThemeType(I);
       FMainMemo.Font.Name := Ini.ReadString('Options', 'EditorFontName', FMainMemo.Font.Name);
-      FMainMemo.Font.Size := Ini.ReadInteger('Options', 'EditorFontSize', FMainMemo.Font.Size);
+      FMainMemo.Font.Size := Ini.ReadInteger('Options', 'EditorFontSize', 10);
       FMainMemo.Font.Charset := Ini.ReadInteger('Options', 'EditorFontCharset', FMainMemo.Font.Charset);
       FMainMemo.Zoom := Ini.ReadInteger('Options', 'Zoom', 0); { MemoZoom will zoom the other memos }
       for Memo in FMemos do
@@ -841,9 +877,13 @@ constructor TMainForm.Create(AOwner: TComponent);
           Memo.Font := FMainMemo.Font;
 
       { UpdatePanel visibility }
-      var KnownVersion := Cardinal(Ini.ReadInteger('Options', 'KnownVersion', 0));
-      UpdatePanel.Visible := KnownVersion < FCompilerVersion.BinVersion;
-      UpdateBevel1Visibility;
+      CheckUpdatePanelMessage(Ini, 'KnownVersion', 0, Integer(FCompilerVersion.BinVersion),
+        'Your version of Inno Setup has been updated! <a id="hwhatsnew">See what''s new</a>.',
+        $ABE3AB); //MGreen with HSL lightness changed from 40% to 78%
+      CheckUpdatePanelMessage(Ini, 'VSCodeMemoKeyMap', 0, 1,
+        'VS Code-style editor shortcuts added! Use the <a id="toptions-vscode">Editor Keys option</a> in Options dialog.',
+        $FFD399); //MBlue with HSL lightness changed from 42% to 80%
+      UpdateUpdatePanel;
 
       { Debug options }
       FOptions.ShowCaretPosition := Ini.ReadBool('Options', 'ShowCaretPosition', False);
@@ -943,7 +983,6 @@ begin
 
   ToolBarPanel.ParentBackground := False;
   UpdatePanel.ParentBackground := False;
-  UpdatePanel.Color := $ABE3AB; //MGreen with HSL lightness changed from 40% to 78%
   UpdatePanelDonateImage.Hint := RemoveAccelChar(HDonate.Caption);
 
   UpdateImages;
@@ -1029,6 +1068,8 @@ begin
 
   FCallTipState.MaxCallTips := 1; { Just like SciTE 5.50 }
 
+  FUpdatePanelMessages := TUpdatePanelMessages.Create;
+
   if CommandLineCompile then begin
     ReadSignTools(FSignTools);
     PostMessage(Handle, WM_StartCommandLineCompile, 0, 0)
@@ -1068,7 +1109,11 @@ destructor TMainForm.Destroy;
       Ini.WriteInteger('State', 'WindowTop', WindowPlacement.rcNormalPosition.Top);
       Ini.WriteInteger('State', 'WindowRight', WindowPlacement.rcNormalPosition.Right);
       Ini.WriteInteger('State', 'WindowBottom', WindowPlacement.rcNormalPosition.Bottom);
-      Ini.WriteBool('State', 'WindowMaximized', WindowState = wsMaximized);
+      { The GetWindowPlacement docs claim that "flags" is always zero.
+        Fortunately, that's wrong. WPF_RESTORETOMAXIMIZED is set when the
+        window is either currently maximized, or currently minimized from a
+        previous maximized state. }
+      Ini.WriteBool('State', 'WindowMaximized', WindowPlacement.flags and WPF_RESTORETOMAXIMIZED <> 0);
       Ini.WriteInteger('State', 'StatusPanelHeight', FromCurrentPPI(StatusPanel.Height));
 
       { Zoom state }
@@ -1092,6 +1137,7 @@ begin
   if FDevNames <> 0 then
     GlobalFree(FDevNames);
 
+  FUpdatePanelMessages.Free;
   FNavStacks.Free;
   FKeyMappedMenus.Free;
   FMenuBitmaps.Free;
@@ -1111,10 +1157,61 @@ begin
   inherited;
 end;
 
+function TMainForm.GetBorderStyle: TFormBorderStyle;
+begin
+  Result := inherited BorderStyle;
+end;
+
+procedure TMainForm.SetBorderStyle(Value: TFormBorderStyle);
+begin
+  { Hack: To stop the Delphi IDE from adding Explicit* properties to the .dfm
+    file every time the unit is saved, we set BorderStyle=bsNone on the form.
+    At run-time, ignore that setting so that BorderStyle stays at the default
+    value, bsSizeable.
+    It would be simpler to change BorderStyle from bsNone to bsSizeable in the
+    form's constructor, but it doesn't quite work: when a form's handle is
+    created while BorderStyle=bsNone, Position=poDefault behaves like
+    poDefaultPosOnly (see TCustomForm.CreateParams). }
+
+  if Value <> bsNone then
+    inherited BorderStyle := Value;
+end;
+
 class procedure TMainForm.AppOnException(Sender: TObject; E: Exception);
 begin
   AppMessageBox(PChar(AddPeriod(E.Message)), SCompilerFormCaption,
     MB_OK or MB_ICONSTOP);
+end;
+
+class procedure TMainForm.AppOnGetActiveFormHandle(var AHandle: HWND);
+begin
+  { As of Delphi 11.3, the default code in TApplication.GetActiveFormHandle
+    (which runs after this handler) calls GetActiveWindow, and if that returns
+    0, it calls GetLastActivePopup(Application.Handle).
+    The problem is that when the application isn't in the foreground,
+    GetActiveWindow returns 0, and when MainFormOnTaskBar=True, the
+    GetLastActivePopup call normally just returns Application.Handle (since
+    there are no popups owned by the application window).
+    So if the application calls Application.MessageBox while it isn't in the
+    foreground, that message box will be owned by Application.Handle, not by
+    the last-active window as it should be. That can lead to the message box
+    falling behind the main form in z-order.
+    To rectify that, when no window is active and MainFormOnTaskBar=True, we
+    fall back to returning the handle of the main form's last active popup,
+    which is the window that would be activated if the main form's taskbar
+    button were clicked. (If Application.Handle is active, we treat that the
+    same as no active window because Application.Handle shouldn't be the owner
+    of any windows when MainFormOnTaskBar=True.)
+    If there is no assigned main form or if MainFormOnTaskBar=False, then we
+    fall back to the default handling. }
+
+  if Application.MainFormOnTaskBar then begin
+    AHandle := GetActiveWindow;
+    if ((AHandle = 0) or (AHandle = Application.Handle)) and
+       Assigned(Application.MainForm) and
+       Application.MainForm.HandleAllocated then
+      AHandle := GetLastActivePopup(Application.MainFormHandle);
+  end;
 end;
 
 procedure TMainForm.FormAfterMonitorDpiChanged(Sender: TObject; OldDPI,
@@ -1130,7 +1227,7 @@ end;
 procedure TMainForm.FormCloseQuery(Sender: TObject;
   var CanClose: Boolean);
 begin
-  if IsWindowEnabled(Application.Handle) then
+  if IsWindowEnabled(Handle) then
     CanClose := ConfirmCloseFile(True)
   else
     { CloseQuery is also called by the VCL when a WM_QUERYENDSESSION message
@@ -1417,7 +1514,7 @@ begin
     var HelpFile := GetHelpFile;
     if Assigned(HtmlHelp) then begin
       HtmlHelp(GetDesktopWindow, PChar(HelpFile), HH_DISPLAY_TOPIC, 0);
-      var S := FActiveMemo.WordAtCursor;
+      var S := FActiveMemo.WordAtCaret;
       if S <> '' then begin
         var KLink: THH_AKLINK;
         FillChar(KLink, SizeOf(KLink), 0);
@@ -1427,6 +1524,10 @@ begin
         HtmlHelp(GetDesktopWindow, PChar(HelpFile), HH_KEYWORD_LOOKUP, DWORD(@KLink));
       end;
     end;
+  end else if ((Key = Ord('V')) or (Key = VK_INSERT)) and (Shift * [ssShift, ssAlt, ssCtrl] = [ssCtrl]) then begin
+    if FActiveMemo.CanPaste then
+      if MultipleSelectionPasteFromClipboard(FActiveMemo) then
+        Key := 0;
   end else if (Key = VK_SPACE) and (Shift * [ssShift, ssAlt, ssCtrl] = [ssShift, ssCtrl]) then begin
     Key := 0;
     { Based on SciTE 5.50's SciTEBase::MenuCommand IDM_SHOWCALLTIP }
@@ -2275,6 +2376,7 @@ begin
     FBuildAnimationFrame := 0;
     FProgress := 0;
     FProgressMax := 0;
+    FTaskbarProgressValue := 0;
 
     FActiveMemo.CancelAutoCompleteAndCallTip;
     FActiveMemo.Cursor := crAppStart;
@@ -2390,12 +2492,14 @@ end;
 procedure TMainForm.SyncEditorOptions;
 const
   SquigglyStyles: array[Boolean] of Integer = (INDIC_HIDDEN, INDIC_SQUIGGLE);
+  WhiteSpaceStyles: array[Boolean] of Integer = (SCWS_INVISIBLE, SCWS_VISIBLEALWAYS);
 var
   Memo: TIDEScintEdit;
 begin
   for Memo in FMemos do begin
     Memo.UseStyleAttributes := FOptions.UseSyntaxHighlighting;
     Memo.Call(SCI_INDICSETSTYLE, minSquiggly, SquigglyStyles[FOptions.UnderlineErrors]);
+    Memo.Call(SCI_SETVIEWWS, WhiteSpaceStyles[FOptions.ShowWhiteSpace], 0);
 
     if FOptions.CursorPastEOL then
       Memo.VirtualSpaceOptions := [svsRectangularSelection, svsUserAccessible, svsNoWrapLineStart]
@@ -2859,7 +2963,7 @@ begin
   ERedo.Enabled := MemoHasFocus and FActiveMemo.CanRedo;
   ECut.Enabled := MemoHasFocus and not MemoIsReadOnly and not FActiveMemo.SelEmpty;
   ECopy.Enabled := MemoHasFocus and not FActiveMemo.SelEmpty;
-  EPaste.Enabled := MemoHasFocus and not MemoIsReadOnly and Clipboard.HasFormat(CF_TEXT);
+  EPaste.Enabled := MemoHasFocus and FActiveMemo.CanPaste;
   EDelete.Enabled := MemoHasFocus and not FActiveMemo.SelEmpty;
   ESelectAll.Enabled := MemoHasFocus;
   ESelectNextOccurrence.Enabled := MemoHasFocus;
@@ -2901,11 +3005,48 @@ begin
   FActiveMemo.CopyToClipboard;
 end;
 
-procedure TMainForm.EPasteClick(Sender: TObject);
+function TMainForm.MultipleSelectionPasteFromClipboard(const AMemo: TIDEScintEdit): Boolean;
 begin
-  FActiveMemo.PasteFromClipboard;
+  { Scintilla doesn't yet properly support multiple selection paste. Handle it
+    here, just like VS and VSCode do: if there's multiple selections and the paste
+    text has the same amount of lines then paste 1 line per selection. Do this even
+    if the paste text is marked as rectangular. Otherwise (so no match between
+    the selection count and the line count) paste all lines into each selection.
+    For the latter we don't need handling here: this is Scintilla's default
+    behaviour if SC_MULTIPASTE_EACH is on. }
+  Result := False;
+  var SelectionCount := AMemo.SelectionCount;
+  if SelectionCount > 1 then begin
+    var PasteLines := Clipboard.AsText.Replace(#13#10, #13).Split([#13, #10]);
+    if SelectionCount = Length(PasteLines) then begin
+      AMemo.BeginUndoAction;
+      try
+        for var I := 0 to SelectionCount-1 do begin
+          var StartPos := AMemo.SelectionStartPosition[I]; { Can't use AMemo.GetSelections because each paste can update other selections }
+          var EndPos := AMemo.SelectionEndPosition[I];
+          AMemo.ReplaceTextRange(StartPos, EndPos, PasteLines[I], srmMinimal);
+          { Update the selection to an empty selection at the end of the inserted
+            text, just like ReplaceMainSelText }
+          var Pos := AMemo.Target.EndPos; { ReplaceTextRange updates the target }
+          AMemo.SelectionCaretPosition[I] := Pos;
+          AMemo.SelectionAnchorPosition[I] := Pos;
+        end;
+        { Be like SCI_PASTE }
+        AMemo.ChooseCaretX;
+        AMemo.ScrollCaretIntoView;
+      finally
+        AMemo.EndUndoAction;
+      end;
+      Result := True;
+    end;
+  end;
 end;
 
+procedure TMainForm.EPasteClick(Sender: TObject);
+begin
+  if not MultipleSelectionPasteFromClipboard(FActiveMemo) then
+    FActiveMemo.PasteFromClipboard;
+end;
 
 procedure TMainForm.EDeleteClick(Sender: TObject);
 begin
@@ -2920,26 +3061,20 @@ end;
 procedure TMainForm.ESelectAllOccurrencesClick(Sender: TObject);
 begin
   { Might be called even if ESelectAllOccurrences.Enabled would be False in EMenuClick }
-  var Options := GetSelTextOccurrenceFindOptions;
   if FActiveMemo.SelEmpty then begin
-    var Range := FActiveMemo.WordAtCursorRange;
-    if Range.StartPos <> Range.EndPos then begin
+    { If the selection is empty then SelectAllOccurrences will actually just select
+      the word at caret which is not what we want, so preselect this word ourselves }
+    var Range := FActiveMemo.WordAtCaretRange;
+    if Range.StartPos <> Range.EndPos then
       FActiveMemo.SetSingleSelection(Range.EndPos, Range.StartPos);
-      Options := GetWordOccurrenceFindOptions;
-    end;
   end;
-  FActiveMemo.SelectAllOccurrences(Options);
+  FActiveMemo.SelectAllOccurrences([sfoMatchCase]);
 end;
 
 procedure TMainForm.ESelectNextOccurrenceClick(Sender: TObject);
 begin
   { Might be called even if ESelectNextOccurrence.Enabled would be False in EMenuClick }
-
-  { Currently this always uses GetWordOccurrenceFindOptions but ideally it would
-    know whether this is the 'first' SelectNext or not. Then, if first it would
-    do what SelectAll does to choose a FindOptions. And if next it would reuse
-    that. This is what VSCode does. }
-  FActiveMemo.SelectNextOccurrence(GetWordOccurrenceFindOptions);
+  FActiveMemo.SelectNextOccurrence([sfoMatchCase]);
 end;
 
 procedure TMainForm.EToggleLinesCommentClick(Sender: TObject);
@@ -3331,12 +3466,9 @@ begin
 end;
 
 procedure TMainForm.BOpenOutputFolderClick(Sender: TObject);
-var
-  Dir: String;
 begin
-  Dir := GetWinDir;
-  ShellExecute(Application.Handle, 'open', PChar(AddBackslash(Dir) + 'explorer.exe'),
-    PChar(Format('/select,"%s"', [FCompiledExe])), PChar(Dir), SW_SHOWNORMAL);
+  LaunchFileOrURL(AddBackslash(GetSystemWinDir) + 'explorer.exe',
+    Format('/select,"%s"', [FCompiledExe]));
 end;
 
 procedure TMainForm.HShortcutsDocClick(Sender: TObject);
@@ -3359,26 +3491,22 @@ end;
 
 procedure TMainForm.HExamplesClick(Sender: TObject);
 begin
-  ShellExecute(Application.Handle, 'open',
-    PChar(PathExtractPath(NewParamStr(0)) + 'Examples'), nil, nil, SW_SHOWNORMAL);
+  LaunchFileOrURL(PathExtractPath(NewParamStr(0)) + 'Examples');
 end;
 
 procedure TMainForm.HFaqClick(Sender: TObject);
 begin
-  ShellExecute(Application.Handle, 'open',
-    PChar(PathExtractPath(NewParamStr(0)) + 'isfaq.url'), nil, nil, SW_SHOWNORMAL);
+  LaunchFileOrURL(PathExtractPath(NewParamStr(0)) + 'isfaq.url');
 end;
 
 procedure TMainForm.HWhatsNewClick(Sender: TObject);
 begin
-  ShellExecute(Application.Handle, 'open',
-    PChar(PathExtractPath(NewParamStr(0)) + 'whatsnew.htm'), nil, nil, SW_SHOWNORMAL);
+  LaunchFileOrURL(PathExtractPath(NewParamStr(0)) + 'whatsnew.htm');
 end;
 
 procedure TMainForm.HWebsiteClick(Sender: TObject);
 begin
-  ShellExecute(Application.Handle, 'open', 'https://jrsoftware.org/isinfo.php', nil,
-    nil, SW_SHOWNORMAL);
+  LaunchFileOrURL('https://jrsoftware.org/isinfo.php');
 end;
 
 procedure TMainForm.HMailingListClick(Sender: TObject);
@@ -3409,8 +3537,8 @@ begin
     String(FCompilerVersion.Version) + SNewLine;
   if FCompilerVersion.Title <> 'Inno Setup' then
     S := S + (SNewLine + 'Based on Inno Setup' + SNewLine);
-  S := S + ('Copyright (C) 1997-2024 Jordan Russell' + SNewLine +
-    'Portions Copyright (C) 2000-2024 Martijn Laan' + SNewLine +
+  S := S + ('Copyright (C) 1997-2025 Jordan Russell' + SNewLine +
+    'Portions Copyright (C) 2000-2025 Martijn Laan' + SNewLine +
     'All rights reserved.' + SNewLine2 +
     'Inno Setup home page:' + SNewLine +
     'https://www.innosetup.com/' + SNewLine2 +
@@ -3948,11 +4076,11 @@ begin
     Selections := TScintRangeList.Create;
 
     if FOptions.HighlightWordAtCursorOccurrences and (AMemo.CaretVirtualSpace = 0) and MainSelSingleLine then begin
-      var Word := AMemo.WordAtCursorRange;
+      var Word := AMemo.WordAtCaretRange;
       if (Word.StartPos <> Word.EndPos) and MainSelection.Within(Word) then begin
         var TextToIndicate := AMemo.GetRawTextRange(Word.StartPos, Word.EndPos);
         AMemo.GetSelections(Selections); { Gets any additional selections as well }
-        FindTextAndAddRanges(AMemo, TextToIndicate, GetWordOccurrenceFindOptions, Selections, IndicatorRanges);
+        FindTextAndAddRanges(AMemo, TextToIndicate, [sfoMatchCase, sfoWholeWord], Selections, IndicatorRanges);
       end;
     end;
     AMemo.UpdateIndicators(IndicatorRanges, minWordAtCursorOccurrence);
@@ -3962,7 +4090,7 @@ begin
       var TextToIndicate := AMemo.RawMainSelText;
       if Selections.Count = 0 then { If 0 then we didn't already call GetSelections above}
         AMemo.GetSelections(Selections);
-      FindTextAndAddRanges(AMemo, TextToIndicate, GetSelTextOccurrenceFindOptions, Selections, IndicatorRanges);
+      FindTextAndAddRanges(AMemo, TextToIndicate, [], Selections, IndicatorRanges);
     end;
     AMemo.UpdateIndicators(IndicatorRanges, minSelTextOccurrence);
   finally
@@ -4153,10 +4281,11 @@ begin
   var LeftBlankMarginWidth := ToCurrentPPI(2); { 2 pixel margin between gutter and the main text }
   var SquigglyWidth := ToCurrentPPI(100); { 100 = 1 pixel }
   var CaretWidth := ToCurrentPPI(2);
+  var WhiteSpaceSize := CaretWidth;
 
   for var Memo in FMemos do
-    Memo.UpdateMarginsAndSquigglyAndCaretWidths(IconMarkersWidth, BaseChangeHistoryWidth,
-      FolderMarkersWidth, LeftBlankMarginWidth, 0, SquigglyWidth, CaretWidth);
+    Memo.UpdateWidthsAndSizes(IconMarkersWidth, BaseChangeHistoryWidth, FolderMarkersWidth,
+      LeftBlankMarginWidth, 0, SquigglyWidth, CaretWidth, WhiteSpaceSize);
 end;
 
 procedure TMainForm.SplitPanelMouseMove(Sender: TObject;
@@ -4310,6 +4439,7 @@ begin
     OptionsForm.CursorPastEOLCheck.Checked := FOptions.CursorPastEOL;
     OptionsForm.TabWidthEdit.Text := IntToStr(FOptions.TabWidth);
     OptionsForm.UseTabCharacterCheck.Checked := FOptions.UseTabCharacter;
+    OptionsForm.ShowWhiteSpaceCheck.Checked := FOptions.ShowWhiteSpace;
     OptionsForm.UseFoldingCheck.Checked := FOptions.UseFolding;
     OptionsForm.AutoIndentCheck.Checked := FOptions.AutoIndent;
     OptionsForm.IndentationGuidesCheck.Checked := FOptions.IndentationGuides;
@@ -4343,6 +4473,7 @@ begin
     FOptions.CursorPastEOL := OptionsForm.CursorPastEOLCheck.Checked;
     FOptions.TabWidth := StrToInt(OptionsForm.TabWidthEdit.Text);
     FOptions.UseTabCharacter := OptionsForm.UseTabCharacterCheck.Checked;
+    FOptions.ShowWhiteSpace := OptionsForm.ShowWhiteSpaceCheck.Checked;
     FOptions.UseFolding := OptionsForm.UseFoldingCheck.Checked;
     FOptions.AutoIndent := OptionsForm.AutoIndentCheck.Checked;
     FOptions.IndentationGuides := OptionsForm.IndentationGuidesCheck.Checked;
@@ -4392,6 +4523,7 @@ begin
       Ini.WriteBool('Options', 'EditorCursorPastEOL', FOptions.CursorPastEOL);
       Ini.WriteInteger('Options', 'TabWidth', FOptions.TabWidth);
       Ini.WriteBool('Options', 'UseTabCharacter', FOptions.UseTabCharacter);
+      Ini.WriteBool('Options', 'ShowWhiteSpace', FOptions.ShowWhiteSpace);
       Ini.WriteBool('Options', 'UseFolding', FOptions.UseFolding);
       Ini.WriteBool('Options', 'AutoIndent', FOptions.AutoIndent);
       Ini.WriteBool('Options', 'IndentationGuides', FOptions.IndentationGuides);
@@ -5196,7 +5328,7 @@ begin
               if not FoundSemicolon then begin
                 var ParameterWordEndPos := I;
                 var ParameterWordStartPos := FActiveMemo.GetWordStartPosition(ParameterWordEndPos, True);
-                var ParameterWord := FActiveMemo.GetTextRange(ParameterWordStartPos,ParameterWordEndPos);
+                var ParameterWord := FActiveMemo.GetTextRange(ParameterWordStartPos, ParameterWordEndPos);
                 FoundFlagsOrType := SameText(ParameterWord, 'Flags') or
                                     ((Section in [scInstallDelete, scUninstallDelete]) and SameText(ParameterWord, 'Type'));
               end else
@@ -5212,9 +5344,19 @@ begin
                 Exit;
               I := LangNamePos;
               FoundDot := True;
-            end
-            else begin
-              if C > ' ' then
+            end else if C > ' ' then begin
+              if IsParamSection and not (Section in [scInstallDelete, scUninstallDelete]) and
+                 (FMemosStyler.FlagsWordList[Section] <> '') then begin
+                { Verify word before the current word (or before that when we get here again) is
+                  a valid flag and if so, continue looking before it instead of stopping }
+                var FlagEndPos := FActiveMemo.GetWordEndPosition(I, True);
+                var FlagStartPos := FActiveMemo.GetWordStartPosition(I, True);
+                var FlagWord := FActiveMemo.GetTextRange(FlagStartPos, FlagEndPos);
+                if FMemosStyler.SectionHasFlag(Section, FlagWord) then
+                  I := FlagStartPos
+                else
+                  Exit;
+              end else
                 Exit;
             end;
           end;
@@ -5229,7 +5371,7 @@ begin
             FActiveMemo.SetAutoCompleteFillupChars(' ');
           end else begin
             WordList := FMemosStyler.KeywordsWordList[Section];
-            if WordList = '' then { Messages & CustomMessages }
+            if WordList = '' then { CustomMessages }
               Exit;
             if IsParamSection then
               FActiveMemo.SetAutoCompleteFillupChars(':')
@@ -5250,9 +5392,10 @@ begin
     FCallTipState.LastPosCallTip := Pos;
 
   // Should get current api definition
-  var Word := FMemosStyler.GetScriptFunctionDefinition(FCallTipState.ClassOrRecordMember, FCallTipState.CurrentCallTipWord, FCallTipState.CurrentCallTip, FCallTipState.MaxCallTips);
-  if Word <> '' then begin
-    FCallTipState.FunctionDefinition := Word;
+  var FunctionDefinition := FMemosStyler.GetScriptFunctionDefinition(FCallTipState.ClassOrRecordMember, FCallTipState.CurrentCallTipWord, FCallTipState.CurrentCallTip, FCallTipState.MaxCallTips);
+  if ((FCallTipState.MaxCallTips = 1) and FunctionDefinition.HasParams) or //if there's a single definition then only show if it has a parameter
+     (FCallTipState.MaxCallTips > 1) then begin                            //if there's multiple then show always just like MemoHintShow, so even the one without parameters if it exists
+    FCallTipState.FunctionDefinition := FunctionDefinition.ScriptFuncWithoutHeader;
     if FCallTipState.MaxCallTips > 1 then
       FCallTipState.FunctionDefinition := AnsiString(Format(#1'%d of %d'#2'%s', [FCallTipState.CurrentCallTip+1, FCallTipState.MaxCallTips, FCallTipState.FunctionDefinition]));
 
@@ -5277,7 +5420,7 @@ begin
   FCallTipState.CurrentCallTipWord := '';
   var Line := FActiveMemo.CaretLineText;
   var Current := FActiveMemo.CaretPositionInLine;
-  var CalltipWordCharacters := FActiveMemo.WordCharsAsSet;
+  var CallTipWordCharacters := FActiveMemo.WordCharsAsSet;
 
   {$ZEROBASEDSTRINGS ON}
   repeat
@@ -5299,16 +5442,16 @@ begin
       Dec(Current);
       Dec(Pos);
     end
-  until not ((Current > 0) and not CharInSet(Line[Current-1], CalltipWordCharacters));
+  until not ((Current > 0) and not CharInSet(Line[Current-1], CallTipWordCharacters));
   {$ZEROBASEDSTRINGS OFF}
   if Current <= 0 then
     Exit;
 
-	FCallTipState.StartCalltipWord := Current - 1;
+	FCallTipState.StartCallTipWord := Current - 1;
   {$ZEROBASEDSTRINGS ON}
-	while (FCallTipState.StartCalltipWord > 0) and CharInSet(Line[FCallTipState.StartCalltipWord-1], CalltipWordCharacters) do
+	while (FCallTipState.StartCallTipWord > 0) and CharInSet(Line[FCallTipState.StartCallTipWord-1], CallTipWordCharacters) do
     Dec(FCallTipState.StartCallTipWord);
-  FCallTipState.ClassOrRecordMember := (FCallTipState.StartCalltipWord > 0) and (Line[FCallTipState.StartCalltipWord-1] = '.');
+  FCallTipState.ClassOrRecordMember := (FCallTipState.StartCallTipWord > 0) and (Line[FCallTipState.StartCallTipWord-1] = '.');
   {$ZEROBASEDSTRINGS OFF}
 
   SetLength(Line, Current);
@@ -5327,7 +5470,7 @@ begin
 
 	var Braces := 0;
 	var Commas := 0;
-	for var I := FCallTipState.StartCalltipWord to Current-1 do begin
+	for var I := FCallTipState.StartCallTipWord to Current-1 do begin
     {$ZEROBASEDSTRINGS ON}
 		if CharInSet(Line[I], ['(', '[']) then
       Inc(Braces)
@@ -5423,8 +5566,16 @@ begin
   end else if FActiveMemo.AutoCompleteActive then begin
     if Ch = '(' then begin
       Inc(FCallTipState.BraceCount);
-      if FOptions.AutoCallTips then
+      if FOptions.AutoCallTips then begin
         InitiateCallTip(Ch);
+        if not FActiveMemo.CallTipActive then begin
+          { Normally the calltip activation means any active autocompletion gets
+            cancelled by Scintilla but if the current word has no call tip then
+            we should make sure ourselves that the added brace still cancels
+            the currently active autocompletion }
+          DoAutoComplete := True;
+        end;
+      end;
     end else if Ch = ')' then
       Dec(FCallTipState.BraceCount)
     else
@@ -5438,8 +5589,8 @@ begin
 
   if DoAutoComplete then begin
     case Ch of
-      'A'..'Z', 'a'..'z', '_', '#', '{', '[', '<':
-        if not FActiveMemo.AutoCompleteActive and FOptions.AutoAutoComplete then
+      'A'..'Z', 'a'..'z', '_', '#', '{', '[', '<', '0'..'9':
+        if not FActiveMemo.AutoCompleteActive and FOptions.AutoAutoComplete and not (Ch in ['0'..'9']) then
           InitiateAutoComplete(Ch);
     else
       var RestartAutoComplete := (Ch in [' ', '.']) and
@@ -5453,19 +5604,20 @@ end;
 
 procedure TMainForm.MemoHintShow(Sender: TObject; var Info: TScintHintInfo);
 
-  function GetCodeVariableDebugEntryFromFileLineCol(FileIndex, Line, Col: Integer): PVariableDebugEntry;
+  function GetCodeVariableDebugEntryFromFileLineCol(FileIndex, Line, Col: Integer; out DebugEntry: PVariableDebugEntry): Boolean;
   var
     I: Integer;
   begin
     { FVariableDebugEntries uses 1-based line and column numbers }
     Inc(Line);
     Inc(Col);
-    Result := nil;
+    Result := False;
     for I := 0 to FVariableDebugEntriesCount-1 do begin
       if (FVariableDebugEntries[I].FileIndex = FileIndex) and
          (FVariableDebugEntries[I].LineNumber = Line) and
          (FVariableDebugEntries[I].Col = Col) then begin
-        Result := @FVariableDebugEntries[I];
+        DebugEntry := @FVariableDebugEntries[I];
+        Result := True;
         Break;
       end;
     end;
@@ -5485,6 +5637,15 @@ procedure TMainForm.MemoHintShow(Sender: TObject; var Info: TScintHintInfo);
     S := FActiveMemo.GetRawTextRange(LinePos, Pos);
     U := FActiveMemo.ConvertRawStringToString(S);
     Result := Length(U);
+  end;
+
+  function FindVarOrFuncRange(const Pos: Integer): TScintRange;
+  begin
+    { Note: The GetPositionAfter is needed so that when the mouse is over a '.'
+      between two words, it won't match the word to the left of the '.' }
+    FActiveMemo.SetDefaultWordChars;
+    Result.StartPos := FActiveMemo.GetWordStartPosition(FActiveMemo.GetPositionAfter(Pos), True);
+    Result.EndPos := FActiveMemo.GetWordEndPosition(Pos, True);
   end;
 
   function FindConstRange(const Pos: Integer): TScintRange;
@@ -5527,60 +5688,82 @@ procedure TMainForm.MemoHintShow(Sender: TObject; var Info: TScintHintInfo);
     end;
   end;
 
-var
-  Pos, Line, I, J: Integer;
-  Output: String;
-  DebugEntry: PVariableDebugEntry;
-  ConstRange: TScintRange;
+  procedure UpdateInfo(var Info: TScintHintInfo; const HintStr: String; const Range: TScintRange; const Memo: TIDEScintEdit);
+  begin
+    Info.HintStr := HintStr;
+    Info.CursorRect.TopLeft := Memo.GetPointFromPosition(Range.StartPos);
+    Info.CursorRect.BottomRight := Memo.GetPointFromPosition(Range.EndPos);
+    Info.CursorRect.Bottom := Info.CursorRect.Top + Memo.LineHeight;
+    Info.HideTimeout := High(Integer); { infinite }
+  end;
+
 begin
-  if FDebugClientWnd = 0 then
-    Exit;
-  Pos := FActiveMemo.GetPositionFromPoint(Info.CursorPos, True, True);
+  var Pos := FActiveMemo.GetPositionFromPoint(Info.CursorPos, True, True);
   if Pos < 0 then
     Exit;
-  Line := FActiveMemo.GetLineFromPosition(Pos);
+  var Line := FActiveMemo.GetLineFromPosition(Pos);
 
-  { Check if cursor is over a [Code] variable }
-  if (FActiveMemo is TIDEScintFileEdit) and
-     (FMemosStyler.GetSectionFromLineState(FActiveMemo.Lines.State[Line]) = scCode) then begin
-    { Note: The '+ 1' is needed so that when the mouse is over a '.'
-      between two words, it won't match the word to the left of the '.' }
-    FActiveMemo.SetDefaultWordChars;
-    I := FActiveMemo.GetWordStartPosition(Pos + 1, True);
-    J := FActiveMemo.GetWordEndPosition(Pos, True);
-    if J > I then begin
-      DebugEntry := GetCodeVariableDebugEntryFromFileLineCol((FActiveMemo as TIDEScintFileEdit).CompilerFileIndex,
-        Line, GetCodeColumnFromPosition(I));
-      if DebugEntry <> nil then begin
+  { Check if cursor is over a [Code] variable or function }
+  if FMemosStyler.GetSectionFromLineState(FActiveMemo.Lines.State[Line]) = scCode then begin
+    var VarOrFuncRange := FindVarOrFuncRange(Pos);
+    if VarOrFuncRange.EndPos > VarOrFuncRange.StartPos then begin
+      var HintStr := '';
+      var DebugEntry: PVariableDebugEntry;
+      if (FActiveMemo is TIDEScintFileEdit) and (FDebugClientWnd <> 0) and
+         GetCodeVariableDebugEntryFromFileLineCol((FActiveMemo as TIDEScintFileEdit).CompilerFileIndex,
+           Line, GetCodeColumnFromPosition(VarOrFuncRange.StartPos), DebugEntry) then begin
+        var Output: String;
         case EvaluateVariableEntry(DebugEntry, Output) of
-          1: Info.HintStr := Output;
-          2: Info.HintStr := Output;
+          1: HintStr := Output;
+          2: HintStr := Output;
         else
-          Info.HintStr := 'Unknown error';
+          HintStr := 'Unknown error';
         end;
-        Info.CursorRect.TopLeft := FActiveMemo.GetPointFromPosition(I);
-        Info.CursorRect.BottomRight := FActiveMemo.GetPointFromPosition(J);
-        Info.CursorRect.Bottom := Info.CursorRect.Top + FActiveMemo.LineHeight;
-        Info.HideTimeout := High(Integer);  { infinite }
+      end else begin
+        var ClassMember := False;
+        var Name := FActiveMemo.GetTextRange(VarOrFuncRange.StartPos, VarOrFuncRange.EndPos);
+        var Index := 0;
+        var Count: Integer;
+        var FunctionDefinition := FMemosStyler.GetScriptFunctionDefinition(ClassMember, Name, Index, Count);
+        if Count = 0 then begin
+          ClassMember := not ClassMember;
+          FunctionDefinition := FMemosStyler.GetScriptFunctionDefinition(ClassMember, Name, Index, Count);
+        end;
+        while Index < Count do begin
+          if Index <> 0 then
+            FunctionDefinition := FMemosStyler.GetScriptFunctionDefinition(ClassMember, Name, Index);
+          if HintStr <> '' then
+            HintStr := HintStr + #13;
+          if FunctionDefinition.WasFunction then
+            HintStr := HintStr + 'function '
+          else
+            HintStr := HintStr + 'procedure ';
+          HintStr := HintStr + String(FunctionDefinition.ScriptFuncWithoutHeader);
+          Inc(Index);
+        end;
+      end;
+
+      if HintStr <> '' then begin
+        UpdateInfo(Info, HintStr, VarOrFuncRange, FActiveMemo);
         Exit;
       end;
     end;
   end;
 
-  { Check if cursor is over a constant }
-  ConstRange := FindConstRange(Pos);
-  if ConstRange.EndPos > ConstRange.StartPos then begin
-    Info.HintStr := FActiveMemo.GetTextRange(ConstRange.StartPos, ConstRange.EndPos);
-    case EvaluateConstant(Info.HintStr, Output) of
-      1: Info.HintStr := Info.HintStr + ' = "' + Output + '"';
-      2: Info.HintStr := Info.HintStr + ' = Exception: ' + Output;
-    else
-      Info.HintStr := Info.HintStr + ' = Unknown error';
+  if FDebugClientWnd <> 0 then begin
+    { Check if cursor is over a constant }
+    var ConstRange := FindConstRange(Pos);
+    if ConstRange.EndPos > ConstRange.StartPos then begin
+      var HintStr := FActiveMemo.GetTextRange(ConstRange.StartPos, ConstRange.EndPos);
+      var Output: String;
+      case EvaluateConstant(Info.HintStr, Output) of
+        1: HintStr := HintStr + ' = "' + Output + '"';
+        2: HintStr := HintStr + ' = Exception: ' + Output;
+      else
+        HintStr := HintStr + ' = Unknown error';
+      end;
+      UpdateInfo(Info, HintStr, ConstRange, FActiveMemo);
     end;
-    Info.CursorRect.TopLeft := FActiveMemo.GetPointFromPosition(ConstRange.StartPos);
-    Info.CursorRect.BottomRight := FActiveMemo.GetPointFromPosition(ConstRange.EndPos);
-    Info.CursorRect.Bottom := Info.CursorRect.Top + FActiveMemo.LineHeight;
-    Info.HideTimeout := High(Integer);  { infinite }
   end;
 end;
 
@@ -6325,15 +6508,21 @@ begin
 
   if Open and UseThemes then begin
     FProgressThemeData := OpenThemeData(Handle, 'Progress');
-    if (GetThemeInt(FProgressThemeData, 0, 0, TMT_PROGRESSCHUNKSIZE, FProgressChunkSize) <> S_OK) or
-       (FProgressChunkSize <= 0) then
-      FProgressChunkSize := 6;
-    if (GetThemeInt(FProgressThemeData, 0, 0, TMT_PROGRESSSPACESIZE, FProgressSpaceSize) <> S_OK) or
-       (FProgressSpaceSize < 0) then  { ...since "OpusOS" theme returns a bogus -1 value }
-      FProgressSpaceSize := 2;
     FMenuThemeData := OpenThemeData(Handle, 'Menu');
     FToolbarThemeData := OpenThemeData(Handle, 'Toolbar');
   end;
+end;
+
+procedure TMainForm.UpdateUpdatePanel;
+begin
+  UpdatePanel.Visible := FUpdatePanelMessages.Count > 0;
+  if UpdatePanel.Visible then begin
+    var MessageToShowIndex := FUpdatePanelMessages.Count-1;
+    UpdateLinkLabel.Tag := MessageToShowIndex;
+    UpdateLinkLabel.Caption := FUpdatePanelMessages[MessageToShowIndex].Msg;
+    UpdatePanel.Color := FUpdatePanelMessages[MessageToShowIndex].Color;
+  end;
+  UpdateBevel1Visibility;
 end;
 
 procedure TMainForm.UpdateMenuBitmapsIfNeeded;
@@ -6585,7 +6774,7 @@ begin
   Info.cbSize := SizeOf(Info);
   Info.fMask := SEE_MASK_FLAG_NO_UI or SEE_MASK_FLAG_DDEWAIT or
     SEE_MASK_NOCLOSEPROCESS or SEE_MASK_NOZONECHECKS;
-  Info.Wnd := Application.Handle;
+  Info.Wnd := Handle;
   if FOptions.RunAsDifferentUser then
     Info.lpVerb := 'runas'
   else
@@ -6595,19 +6784,21 @@ begin
   WorkingDir := PathExtractDir(RunFilename);
   Info.lpDirectory := PChar(WorkingDir);
   Info.nShow := SW_SHOWNORMAL;
-  { Disable windows so that the user can't click other things while a "Run as"
-    dialog is up but is not system modal (which it is currently) }
+  { When the RunAsDifferentUser option is enabled, it's this process that
+    waits on the UAC dialog, not Setup(Ldr), so we need to disable windows to
+    prevent the user from clicking other things before the UAC dialog is
+    dismissed (which is definitely a possibility if the "Switch to the secure
+    desktop when prompting for elevation" setting is disabled in Group
+    Policy). }
   SaveFocusWindow := GetFocus;
-  WindowList := DisableTaskWindows(0);
+  WindowList := DisableTaskWindows(Handle);
   try
     { Also temporarily remove the focus since a disabled window's children can
-      still receive keystrokes. This is needed if the UAC dialog doesn't come to
-      the foreground for some reason (e.g. if the following SetActiveWindow call
-      is removed). }
+      still receive keystrokes. This is needed if Windows doesn't switch to
+      the secure desktop immediately and instead shows a flashing taskbar
+      button that the user must click (which happened on Windows Vista; I'm
+      unable to reproduce it on Windows 11). }
     Windows.SetFocus(0);
-    { We have to make the application window the active window, otherwise the
-      UAC dialog doesn't come to the foreground automatically. }
-    SetActiveWindow(Application.Handle);
     ShellExecuteResult := ShellExecuteEx(@Info);
     ErrorCode := GetLastError;
   finally
@@ -6693,7 +6884,7 @@ begin
 end;
 
 function TMainForm.EvaluateConstant(const S: String;
-  var Output: String): Integer;
+  out Output: String): Integer;
 begin
   { This is about evaluating constants like 'app' and not [Code] variables }
   FReplyString := '';
@@ -6704,7 +6895,7 @@ begin
 end;
 
 function TMainForm.EvaluateVariableEntry(const DebugEntry: PVariableDebugEntry;
-  var Output: String): Integer;
+  out Output: String): Integer;
 begin
   FReplyString := '';
   Result := SendCopyDataMessage(FDebugClientWnd, Handle, CD_DebugClient_EvaluateVariableEntry,
@@ -6973,25 +7164,39 @@ begin
         var R := Rect;
         InflateRect(R, -2, -2);
         if FProgressThemeData = 0 then begin
+          { Border }
+          StatusBar.Canvas.Pen.Color := clBtnShadow;
+          StatusBar.Canvas.Brush.Style := bsClear;
+          StatusBar.Canvas.Rectangle(R);
+          InflateRect(R, -1, -1);
+          { Filled part }
+          var SaveRight := R.Right;
           R.Right := R.Left + MulDiv(FProgress, R.Right - R.Left,
             FProgressMax);
           StatusBar.Canvas.Brush.Color := clHighlight;
           StatusBar.Canvas.FillRect(R);
+          { Unfilled part }
+          R.Left := R.Right;
+          R.Right := SaveRight;
+          StatusBar.Canvas.Brush.Color := clBtnFace;
+          StatusBar.Canvas.FillRect(R);
         end else begin
-          DrawThemeBackground(FProgressThemeData, StatusBar.Canvas.Handle, PP_BAR, 0, R, nil);
-          var BR := R;
-          GetThemeBackgroundContentRect(FProgressThemeData, StatusBar.Canvas.Handle, PP_BAR, 0, BR, @R);
-          IntersectClipRect(StatusBar.Canvas.Handle, R.Left, R.Top, R.Right, R.Bottom);
-          var W := MulDiv(FProgress, R.Right - R.Left, FProgressMax);
-          var ChunkCount := W div (FProgressChunkSize + FProgressSpaceSize);
-          if W mod (FProgressChunkSize + FProgressSpaceSize) > 0 then
-            Inc(ChunkCount);
-          R.Right := R.Left + FProgressChunkSize;
-          for W := 0 to ChunkCount - 1 do
-          begin
-            DrawThemeBackground(FProgressThemeData, StatusBar.Canvas.Handle, PP_CHUNK, 0, R, nil);
-            OffsetRect(R, FProgressChunkSize + FProgressSpaceSize, 0);
-          end;
+          DrawThemeBackground(FProgressThemeData, StatusBar.Canvas.Handle,
+            PP_BAR, 0, R, nil);
+          { PP_FILL drawing on Windows 11 (and probably 10) is bugged: when
+            the width of the green bar is less than ~25 pixels, the bar is
+            drawn over the left border. The same thing happens with
+            TProgressBar, so I don't think the API is being used incorrectly.
+            Work around the bug by passing a clipping rectangle that excludes
+            the left edge when running on Windows 10/11 only. (I don't know if
+            earlier versions need it, or if later versions will fix it.) }
+          var CR := R;
+          if (Win32MajorVersion = 10) and (Win32MinorVersion = 0) then
+            Inc(CR.Left);  { does this need to be DPI-scaled? }
+          R.Right := R.Left + MulDiv(FProgress, R.Right - R.Left,
+            FProgressMax);
+          DrawThemeBackground(FProgressThemeData, StatusBar.Canvas.Handle,
+            PP_FILL, PBFS_NORMAL, R, @CR);
         end;
       end;
   end;
@@ -7011,16 +7216,15 @@ end;
 procedure TMainForm.UpdateCompileStatusPanels(const AProgress,
   AProgressMax: Cardinal; const ASecondsRemaining: Integer;
   const ABytesCompressedPerSecond: Cardinal);
-var
-  T: DWORD;
 begin
-  { Icon panel }
-  T := GetTickCount;
-  if Cardinal(T - FLastAnimationTick) >= Cardinal(500) then begin
-    FLastAnimationTick := T;
+  var CurTick := GetTickCount;
+  var LastTick := FLastAnimationTick;
+  FLastAnimationTick := CurTick;
+
+  { Icon and text panels - updated every 500ms }
+  if CurTick div 500 <> LastTick div 500 then begin
     InvalidateStatusPanel(spCompileIcon);
     FBuildAnimationFrame := (FBuildAnimationFrame + 1) mod 4;
-    { Also update the status text twice a second }
     if ASecondsRemaining >= 0 then
       StatusBar.Panels[spExtraStatus].Text := Format(
         ' Estimated time remaining: %.2d%s%.2d%s%.2d     Average KB/sec: %.0n',
@@ -7031,13 +7235,29 @@ begin
       StatusBar.Panels[spExtraStatus].Text := '';
   end;
 
-  { Progress panel and taskbar progress bar }
-  if (FProgress <> AProgress) or
-     (FProgressMax <> AProgressMax) then begin
+  { Progress panel and taskbar progress bar - updated every 100ms }
+  if (CurTick div 100 <> LastTick div 100) and
+     ((FProgress <> AProgress) or (FProgressMax <> AProgressMax)) then begin
     FProgress := AProgress;
     FProgressMax := AProgressMax;
     InvalidateStatusPanel(spCompileProgress);
-    SetAppTaskbarProgressValue(AProgress, AProgressMax);
+
+    { The taskbar progress updates are slow (on Windows 11). Limiting the
+      range to 64 instead of 1024 improved compression KB/sec by about 4%
+      (9000 to 9400) when the rate limit above is disabled. }
+    var NewValue: Cardinal := 1;  { must be at least 1 for progress bar to show }
+    if AProgressMax > 0 then begin
+      { Not using MulDiv here to avoid rounding up }
+      NewValue := (AProgress * 64) div AProgressMax;
+      if NewValue = 0 then
+        NewValue := 1;
+    end;
+    { Don't call the function if the value hasn't changed, just in case there's
+      a performance penalty. (There doesn't appear to be on Windows 11.) }
+    if FTaskbarProgressValue <> NewValue then begin
+      FTaskbarProgressValue := NewValue;
+      SetAppTaskbarProgressValue(NewValue, 64);
+    end;
   end;
 end;
 
@@ -7208,7 +7428,7 @@ begin
 
     { If it has been, offer to reload it }
     if Changed then begin
-      if IsWindowEnabled(Application.Handle) then begin
+      if IsWindowEnabled(Handle) then begin
         if MsgBox(Format(ReloadMessages[Memo.Modified], [Memo.Filename]),
            SCompilerFormCaption, mbConfirmation, MB_YESNO) = IDYES then
           if ConfirmCloseFile(False) then begin
@@ -7615,22 +7835,29 @@ end;
 procedure TMainForm.UpdateLinkLabelLinkClick(Sender: TObject;
   const Link: string; LinkType: TSysLinkType);
 begin
-  if (LinkType = sltID) and (Link = 'whatsnew') then begin
-    HWhatsNew.Click;
+  var Handled := True;
+  if (LinkType = sltID) and (Link = 'hwhatsnew') then
+    HWhatsNew.Click
+  else if (LinkType = sltID) and (Link = 'toptions-vscode') then begin
+    TOptionsForm.DropDownMemoKeyMappingComboBoxOnNextShow := True;
+    TOptions.Click
+  end else
+    Handled := False;
+  if Handled then
     UpdatePanelClosePaintBoxClick(Sender);
-  end;
 end;
 
 procedure TMainForm.UpdatePanelClosePaintBoxClick(Sender: TObject);
 begin
+  var MessageToHideIndex := UpdateLinkLabel.Tag;
   var Ini := TConfigIniFile.Create;
   try
-    Ini.WriteInteger('Options', 'KnownVersion', FCompilerVersion.BinVersion);
+    Ini.WriteInteger('UpdatePanel', FUpdatePanelMessages[MessageToHideIndex].ConfigIdent, FUpdatePanelMessages[MessageToHideIndex].ConfigValue);
   finally
     Ini.Free;
   end;
-  UpdatePanel.Visible := False;
-  UpdateBevel1Visibility;
+  FUpdatePanelMessages.Delete(MessageToHideIndex);
+  UpdateUpdatePanel;
 end;
 
 procedure TMainForm.UpdatePanelDonateImageClick(Sender: TObject);
@@ -7691,6 +7918,7 @@ begin
 end;
 
 initialization
+  Application.OnGetActiveFormHandle := TMainForm.AppOnGetActiveFormHandle;
   InitThemeLibrary;
   InitHtmlHelpLibrary;
   { For ClearType support, try to make the default font Microsoft Sans Serif }

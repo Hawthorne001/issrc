@@ -15,7 +15,7 @@ uses
   Windows, SysUtils, Messages, Classes, Graphics, Controls,
   Forms, Dialogs, StdCtrls, ExtCtrls,
   Setup.SetupForm, Shared.Struct, Shared.Int64Em, NewCheckListBox, RichEditViewer, NewStaticText,
-  Shared.SetupTypes, NewProgressBar, Shared.SetupMessageIDs, PasswordEdit, FolderTreeView, BitmapImage,
+  NewProgressBar, Shared.SetupMessageIDs, PasswordEdit, FolderTreeView, BitmapImage,
   NewNotebook, BidiCtrls;
 
 type
@@ -189,6 +189,7 @@ type
     EnableAnchorOuterPagesOnResize: Boolean;
     EnableAdjustReadyLabelHeightOnResize: Boolean;
     procedure AdjustFocus;
+    procedure AnchorOuterPages;
     procedure CalcCurrentComponentsSpace;
     procedure ChangeReadyLabel(const S: String);
     function CheckSerialOk: Boolean;
@@ -210,8 +211,7 @@ type
     procedure UpdatePage(const PageID: Integer);
     procedure UpdateSelectTasksPage;
     procedure WMSysCommand(var Message: TWMSysCommand); message WM_SYSCOMMAND;
-  protected
-    procedure CreateParams(var Params: TCreateParams); override;
+    procedure WMWindowPosChanging(var Message: TWMWindowPosChanging); message WM_WINDOWPOSCHANGING;
   public
     { Public declarations }
     PrepareToInstallFailureMessage: String;
@@ -342,8 +342,11 @@ function ValidateCustomDirEdit(const AEdit: TEdit;
 implementation
 
 uses
-  ShellApi, ShlObj, Types, SetupLdrAndSetup.Messages, Setup.MainForm, Setup.MainFunc, PathFunc, Shared.CommonFunc.Vcl, Shared.CommonFunc,
-  MD5, Setup.InstFunc, Setup.SelectFolderForm, Setup.FileExtractor, Setup.LoggingFunc, RestartManager, Setup.ScriptRunner;
+  ShellApi, ShlObj, Types,
+  PathFunc, RestartManager,
+  SetupLdrAndSetup.Messages, Setup.MainForm, Setup.MainFunc, Shared.CommonFunc.Vcl,
+  Shared.CommonFunc, Setup.InstFunc, Setup.SelectFolderForm, Setup.FileExtractor,
+  Setup.LoggingFunc, Setup.ScriptRunner, Shared.SetupTypes, Shared.SetupSteps;
 
 {$R *.DFM}
 
@@ -739,17 +742,20 @@ constructor TWizardForm.Create(AOwner: TComponent);
   var
     TargetArea, Difference, SmallestDifference, I: Integer;
   begin
-    { Find the image with the smallest area difference compared to the target area. }
-    TargetArea := TargetWidth*TargetHeight;
-    SmallestDifference := -1;
-    Result := nil;
-    for I := 0 to WizardImages.Count-1 do begin
-      Difference := Abs(TargetArea-TBitmap(WizardImages[I]).Width*TBitmap(WizardImages[I]).Height);
-      if (SmallestDifference = -1) or (Difference < SmallestDifference) then begin
-        Result := WizardImages[I];
-        SmallestDifference := Difference;
+    if WizardImages.Count <> 1 then begin
+      { Find the image with the smallest area difference compared to the target area. }
+      TargetArea := TargetWidth*TargetHeight;
+      SmallestDifference := -1;
+      Result := nil;
+      for I := 0 to WizardImages.Count-1 do begin
+        Difference := Abs(TargetArea-TBitmap(WizardImages[I]).Width*TBitmap(WizardImages[I]).Height);
+        if (SmallestDifference = -1) or (Difference < SmallestDifference) then begin
+          Result := WizardImages[I];
+          SmallestDifference := Difference;
+        end;
       end;
-    end;
+    end else
+      Result := WizardImages[0];
   end;
 
 var
@@ -757,10 +763,9 @@ var
   SystemMenu: HMENU;
   P: String;
   I, DefaultSetupTypeIndex: Integer;
-  DfmDefault, IgnoreInitComponents: Boolean;
+  IgnoreInitComponents: Boolean;
   TypeEntry: PSetupTypeEntry;
   ComponentEntry: PSetupComponentEntry;
-  SaveClientWidth, SaveClientHeight: Integer;
 begin
   inherited;
 
@@ -772,23 +777,6 @@ begin
   PrevDeselectedTasks := TStringList.Create();
 
   MainPanel.ParentBackground := False;
-
-  { Prior to scaling the form, shrink WizardSmallBitmapImage if it's currently
-    larger than WizardSmallImage. This way, stretching will not occur if the
-    user specifies a smaller-than-default image and WizardImageStretch=yes,
-    except if the form has to be scaled (e.g. due to Large Fonts). }
-  if WizardSmallImages.Count = 1 then begin
-    I := WizardSmallBitmapImage.Height - TBitmap(WizardSmallImages[0]).Height;
-    if I > 0 then begin
-      WizardSmallBitmapImage.Height := WizardSmallBitmapImage.Height - I;
-      WizardSmallBitmapImage.Top := WizardSmallBitmapImage.Top + (I div 2);
-    end;
-    I := WizardSmallBitmapImage.Width - TBitmap(WizardSmallImages[0]).Width;
-    if I > 0 then begin
-      WizardSmallBitmapImage.Width := WizardSmallBitmapImage.Width - I;
-      WizardSmallBitmapImage.Left := WizardSmallBitmapImage.Left + (I div 2);
-    end;
-  end;
 
   { Not sure why the following is needed but various things related to
     positioning and anchoring don't work without this (you get positions of
@@ -806,34 +794,17 @@ begin
   WelcomeLabel1.Font.Style := [fsBold];
   PageNameLabel.Font.Style := [fsBold];
 
-  if shWindowVisible in SetupHeader.Options then
-    Caption := SetupMessages[msgSetupAppTitle]
-  else if shDisableWelcomePage in SetupHeader.Options then
+  if shDisableWelcomePage in SetupHeader.Options then
     Caption := FmtSetupMessage1(msgSetupWindowTitle, ExpandedAppVerName)
   else
     Caption := FmtSetupMessage1(msgSetupWindowTitle, ExpandedAppName);
 
-  { Set BorderStyle and BorderIcons:
-    -WindowVisible + WizardResizable = sizeable
-    -not WindowVisible + WizardResizable = sizeable + minimize
-    -WindowVisible + not WizardResizable = dialog = .dfm default = do nothing
-    -not WindowVisible + not WizardResizable = single + minimize }
-  DfmDefault := (shWindowVisible in SetupHeader.Options) and not (shWizardResizable in SetupHeader.Options);
-  if not DfmDefault then begin
-    { Save ClientWidth/ClientHeight and restore them after changing BorderStyle. }
-    SaveClientWidth := ClientWidth;
-    SaveClientHeight := ClientHeight;
-    if not(shWindowVisible in SetupHeader.Options) then
-      BorderIcons := BorderIcons + [biMinimize];
-    if not(shWizardResizable in SetupHeader.Options) then
-      BorderStyle := bsSingle
-    else
-      BorderStyle := bsSizeable;
+  if shWizardResizable in SetupHeader.Options then begin
+    const SaveClientWidth = ClientWidth;
+    const SaveClientHeight = ClientHeight;
+    BorderStyle := bsSizeable;
     ClientWidth := SaveClientWidth;
     ClientHeight := SaveClientHeight;
-  end;
-
-  if shWizardResizable in SetupHeader.Options then begin
     EnableAnchorOuterPagesOnResize := True;
     { Do not allow user to resize it smaller than 100% nor larger than 150%. }
     Constraints.MinHeight := Height;
@@ -863,6 +834,54 @@ begin
   if SetupHeader.WizardStyle = wsModern then begin
     OuterNotebook.Color := clWindow;
     Bevel1.Visible := False;
+  end;
+
+  { Correct aspect ratio of the large wizard images after scaling }
+  AnchorOuterPages;
+
+  { Adjust small wizard image's size and position }
+  begin
+    { Make sure the control is still perfectly square after scaling and flush
+      with the right edge of its parent }
+    I := WizardSmallBitmapImage.Left;
+    WizardSmallBitmapImage.Width := WizardSmallBitmapImage.Height;
+    WizardSmallBitmapImage.Left := WizardSmallBitmapImage.Parent.ClientWidth -
+      WizardSmallBitmapImage.Width;
+    Dec(I, WizardSmallBitmapImage.Left);
+    PageNameLabel.Width := PageNameLabel.Width - I;
+    PageDescriptionLabel.Width := PageDescriptionLabel.Width - I;
+
+    { Reduce the size of the control if appropriate:
+      - If the user supplied a single image AND that image is not larger than
+        the default control size before scaling (58x58), then reduce the
+        control size to match the image dimensions. That avoids stretching to
+        58x58 when the user is purposely using a smaller-than-default image
+        (such as 55x55 or 32x32) and WizardImageStretch=yes.
+      - Otherwise, it's unclear what size/shape the user prefers for the
+        control. Keep the default control size. }
+    var NewWidth := TBitmap(WizardSmallImages[0]).Width;
+    var NewHeight := TBitmap(WizardSmallImages[0]).Height;
+    if (WizardSmallImages.Count > 1) or
+       (NewWidth > 58) or
+       (NewHeight > 58) then begin
+      NewWidth := 58;
+      NewHeight := 58;
+    end;
+
+    { Scale the new width and height }
+    NewWidth := MulDiv(NewWidth, WizardSmallBitmapImage.Width, 58);
+    NewHeight := MulDiv(NewHeight, WizardSmallBitmapImage.Height, 58);
+
+    I := WizardSmallBitmapImage.Height - NewHeight;
+    if I > 0 then begin
+      WizardSmallBitmapImage.Height := WizardSmallBitmapImage.Height - I;
+      WizardSmallBitmapImage.Top := WizardSmallBitmapImage.Top + (I div 2);
+    end;
+    I := WizardSmallBitmapImage.Width - NewWidth;
+    if I > 0 then begin
+      WizardSmallBitmapImage.Width := WizardSmallBitmapImage.Width - I;
+      WizardSmallBitmapImage.Left := WizardSmallBitmapImage.Left + (I div 2);
+    end;
   end;
 
   { Initialize images }
@@ -1242,7 +1261,7 @@ begin
     NoIconsCheck.Visible := False;
 end;
 
-procedure TWizardForm.FormResize(Sender: TObject);
+procedure TWizardForm.AnchorOuterPages;
 
   procedure AnchorOuterPage(const Page: TNewNotebookPage;
     const BitmapImage: TBitmapImage);
@@ -1263,15 +1282,15 @@ procedure TWizardForm.FormResize(Sender: TObject);
     if BitmapImage.Visible and (BitmapImage.Align = alNone) and (BitmapImage.Anchors = ExpectedAnchors) then begin
       if BaseUnitX = 0 then
         InternalError('AnchorOuterPage: BaseUnitX = 0');
-      NewWidth := MulDiv(BitmapImage.Height, ScalePixelsX(164), ScalePixelsY(314)); //164x314 is the original bitmapimage size
+      NewWidth := MulDiv(BitmapImage.Height, 164, 314); //164x314 is the original bitmapimage size
       if ControlsFlipped then
-        BitmapImage.Left := ClientWidth - NewWidth;
+        BitmapImage.Left := Page.ClientWidth - NewWidth;
       BitmapImage.Width := NewWidth;
       for I := 0 to Page.ControlCount-1 do begin
         Ctl := Page.Controls[I];
         if Ctl <> BitmapImage then begin
           NewLeft := BitmapImage.Width + ScalePixelsX(12); //12 is original space between bitmapimage and controls
-          Ctl.Width := ClientWidth - ScalePixelsX(20) - NewLeft; //20 is original space between controls and right border
+          Ctl.Width := Page.ClientWidth - ScalePixelsX(20) - NewLeft; //20 is original space between controls and right border
           if not ControlsFlipped then
             Ctl.Left := NewLeft;
         end;
@@ -1280,10 +1299,14 @@ procedure TWizardForm.FormResize(Sender: TObject);
   end;
 
 begin
-  if EnableAnchorOuterPagesOnResize then begin
-    AnchorOuterPage(WelcomePage, WizardBitmapImage);
-    AnchorOuterPage(FinishedPage, WizardBitmapImage2);
-  end;
+  AnchorOuterPage(WelcomePage, WizardBitmapImage);
+  AnchorOuterPage(FinishedPage, WizardBitmapImage2);
+end;
+
+procedure TWizardForm.FormResize(Sender: TObject);
+begin
+  if EnableAnchorOuterPagesOnResize then
+    AnchorOuterPages;
   if EnableAdjustReadyLabelHeightOnResize then
     IncTopDecHeight(ReadyMemo, AdjustLabelHeight(ReadyLabel));
 end;
@@ -1305,14 +1328,6 @@ begin
   FreeAndNil(InitialSelectedComponents);
   FreeAndNil(FPageList);
   inherited;
-end;
-
-procedure TWizardForm.CreateParams(var Params: TCreateParams);
-begin
-  inherited;
-  { Ensure the form is *always* on top of MainForm by making MainForm
-    the "parent" of the form. }
-  Params.WndParent := MainForm.Handle;
 end;
 
 function TWizardForm.PageIndexFromID(const ID: Integer): Integer;
@@ -1825,21 +1840,20 @@ begin
     BackButton.Visible := False;
     NextButton.Visible := False;
     CancelButton.Enabled := False;
-    if InstallMode = imSilent then begin
-      SetActiveWindow(Application.Handle);  { ensure taskbar button is selected }
-      WizardForm.Show;
-    end;
+    if InstallMode = imSilent then
+      WizardForm.Visible := True;
     WizardForm.Update;
     try
-      DownloadTemporaryFileProcessMessages := True;
+      DownloadTemporaryFileOrExtract7ZipArchiveProcessMessages := True;
       CodeNeedsRestart := False;
       Result := CodeRunner.RunStringFunctions('PrepareToInstall', [@CodeNeedsRestart], bcNonEmpty, True, '');
       PrepareToInstallNeedsRestart := (Result <> '') and CodeNeedsRestart;
     finally
-      DownloadTemporaryFileProcessMessages := False;
+      DownloadTemporaryFileOrExtract7ZipArchiveProcessMessages := False;
       UpdateCurPageButtonState;
     end;
-    Application.BringToFront;
+    if WindowState <> wsMinimized then  { VCL bug workaround }
+      Application.BringToFront;
   end;
   if Result <> '' then begin
     if PrepareToInstallNeedsRestart then
@@ -2279,31 +2293,44 @@ end;
 procedure TWizardForm.NextButtonClick(Sender: TObject);
 
   function CheckPassword: Boolean;
-  { Also see Main.HandleInitPassword }
-  var
-    S: String;
-    SaveCursor: HCURSOR;
+  { Also see MainFunc.HandleInitPassword }
   begin
     Result := False;
-    S := PasswordEdit.Text;
+    var S := PasswordEdit.Text;
+
+    var Timer: TOneShotTimer;
+    Timer.Start(750); { See comment below }
+
+    var CryptKey: TSetupEncryptionKey;
+    var SaveCursor := GetCursor;
+    SetCursor(LoadCursor(0, IDC_WAIT));
+    try
+      GenerateEncryptionKey(S, SetupHeader.EncryptionKDFSalt, SetupHeader.EncryptionKDFIterations, CryptKey);
+    finally
+      SetCursor(SaveCursor);
+    end;
+
     if shPassword in SetupHeader.Options then
-      Result := TestPassword(S);
+      Result := TestPassword(CryptKey);
     if not Result and (CodeRunner <> nil) then
       Result := CodeRunner.RunBooleanFunctions('CheckPassword', [S], bcTrue, False, Result);
 
     if Result then begin
       NeedPassword := False;
       if shEncryptionUsed in SetupHeader.Options then
-        FileExtractor.CryptKey := S;
+        FileExtractor.CryptKey := CryptKey;
       PasswordEdit.Text := '';
     end else begin
-      { Delay for 750 ms when an incorrect password is entered to
+      { Ensure a total time of 750 ms when an incorrect password is entered to
         discourage brute-force attempts }
       if Visible then begin
         SaveCursor := GetCursor;
         SetCursor(LoadCursor(0, IDC_WAIT));
-        Sleep(750);
-        SetCursor(SaveCursor);
+        try
+          Timer.SleepUntilExpired;
+        finally
+          SetCursor(SaveCursor);
+        end;
       end;
       LoggedMsgBox(SetupMessages[msgIncorrectPassword], '', mbError, MB_OK, True, IDOK);
       if Visible then begin
@@ -2506,10 +2533,8 @@ begin
               SetCurPage(wpPreparing); { controls are already hidden by PrepareToInstall }
               BackButton.Visible := False;
               NextButton.Visible := False;
-              if InstallMode = imSilent then begin
-                SetActiveWindow(Application.Handle);  { ensure taskbar button is selected }
-                WizardForm.Show;
-              end;
+              if InstallMode = imSilent then
+                WizardForm.Visible := True;
               try
                 WizardForm.Update;
                 RmFoundApplications := QueryRestartManager(WizardComponents, WizardTasks) <> '';
@@ -2656,16 +2681,45 @@ end;
 
 procedure TWizardForm.WMSysCommand(var Message: TWMSysCommand);
 begin
-  if Message.CmdType and $FFF0 = SC_MINIMIZE then
-    { A minimize button is shown on the wizard form when (shWindowVisible in
-      SetupHeader.Options). When it is clicked we want to minimize the whole
-      application. }
-    Application.Minimize
-  else
-  if Message.CmdType = 9999 then
-    MainForm.ShowAboutBox
-  else
+  if Message.CmdType = 9999 then begin
+    { Removing the About box or modifying any existing text inside it is a
+      violation of the Inno Setup license agreement; see LICENSE.TXT.
+      However, adding additional lines to the end of the About box is
+      permitted. }
+    var S := SetupTitle + ' version ' + SetupVersion + SNewLine;
+    if SetupTitle <> 'Inno Setup' then
+      S := S + (SNewLine + 'Based on Inno Setup' + SNewLine);
+    S := S + ('Copyright (C) 1997-2025 Jordan Russell' + SNewLine +
+      'Portions Copyright (C) 2000-2025 Martijn Laan' + SNewLine +
+      'All rights reserved.' + SNewLine2 +
+      'Inno Setup home page:' + SNewLine +
+      'https://www.innosetup.com/');
+    S := S + SNewLine2 + 'RemObjects Pascal Script home page:' + SNewLine +
+      'https://www.remobjects.com/ps';
+    if SetupMessages[msgAboutSetupNote] <> '' then
+      S := S + SNewLine2 + SetupMessages[msgAboutSetupNote];
+    if SetupMessages[msgTranslatorNote] <> '' then
+      S := S + SNewLine2 + SetupMessages[msgTranslatorNote];
+    StringChangeEx(S, '(C)', #$00A9, True);
+    LoggedMsgBox(S, SetupMessages[msgAboutSetupTitle], mbInformation, MB_OK, False, 0)
+  end else
     inherited;
+end;
+
+procedure TWizardForm.WMWindowPosChanging(var Message: TWMWindowPosChanging);
+begin
+  { Work around a VCL issue (Delphi 11.3) when MainFormOnTaskBar=True:
+    If Application.Restore is called while the main form is hidden
+    (Visible=False), the window can become visible because of the SW_RESTORE
+    command it uses, which both unminimizes and shows a window. Reproducer:
+      Application.Minimize;
+      Hide;
+      Application.Restore;
+    This blocks any attempt to show the window while Visible=False.
+    (SW_RESTORE will still unminimize the window; it just cannot show it.) }
+  inherited;
+  if not Visible then
+    Message.WindowPos.flags := Message.WindowPos.flags and not SWP_SHOWWINDOW;
 end;
 
 procedure TWizardForm.LicenseAcceptedRadioClick(Sender: TObject);
@@ -2987,14 +3041,10 @@ begin
         { After installation, we can't abort since e.g. a restart might be
           needed. Instead, to avoid getting stuck in a loop, show the wizard
           (even though this is a silent install) and let the user deal with the
-          problem on their own.
-          The taskbar button will be hidden at this point on very silent
-          installs (see SetupInstallMode); re-show it. }
+          problem on their own. }
         Log('Failed to proceed to next wizard page; showing wizard.');
-        SetTaskbarButtonVisibility(True);
+        WizardForm.Visible := True;
         Application.Restore;
-        SetActiveWindow(Application.Handle);  { ensure taskbar button is selected }
-        WizardForm.Show;
         Break;
       end;
     end;

@@ -245,6 +245,8 @@ end;
 
 TFormStyle = (fsNormal, fsMDIChild, fsMDIForm, fsStayOnTop);
 
+TPopupMode = (pmNone, pmAuto, pmExplicit);
+
 TPosition = (poDesigned, poDefault, poDefaultPosOnly, poDefaultSizeOnly, poScreenCenter, poDesktopCenter, poMainFormCenter, poOwnerFormCenter);
 
 TCloseAction = (caNone, caHide, caFree, caMinimize);
@@ -280,6 +282,8 @@ TForm = class(TScrollingWinControl)
   property Font: TFont; read write;
   property FormStyle: TFormStyle; read write;
   property KeyPreview: Boolean; read write;
+  property PopupMode: TPopupMode; read write;
+  property PopupParent: TForm; read write;
   property Position: TPosition; read write;
   property OnActivate: TNotifyEvent; read write;
   property OnClick: TNotifyEvent; read write;
@@ -780,6 +784,15 @@ TDownloadWizardPage = class(TOutputProgressWizardPage)
   property ShowBaseNameInsteadOfUrl: Boolean; read write;
 end;
 
+TExtractionWizardPage = class(TOutputProgressWizardPage)
+  property AbortButton: TNewButton; read;
+  property AbortedByUser: Boolean; read;
+  procedure Add(const ArchiveFileName, DestDir: String; const FullPaths: Boolean);
+  procedure Clear;
+  procedure Extract;
+  property ShowArchiveInsteadOfFile: Boolean; read write;
+end;
+
 TUIStateForm = class(TForm)
 end;
 
@@ -793,10 +806,6 @@ TSetupForm = class(TUIStateForm)
   property KeepSizeY: Boolean; read; write;
   property RightToLeft: Boolean; read;
   property SizeAndCenterOnShow: Boolean; read write;
-end;
-
-TMainForm = class(TSetupForm)
-  procedure ShowAboutBox;
 end;
 
 TWizardForm = class(TSetupForm)

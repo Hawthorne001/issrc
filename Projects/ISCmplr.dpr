@@ -38,16 +38,17 @@ uses
   PathFunc in '..\Components\PathFunc.pas',
   Shared.CommonFunc in 'Src\Shared.CommonFunc.pas',
   Shared.Int64Em in 'Src\Shared.Int64Em.pas',
-  SHA1 in '..\Components\SHA1.pas',
+  SHA256 in '..\Components\SHA256.pas',
   Shared.DebugStruct in 'Src\Shared.DebugStruct.pas',
   Shared.LangOptionsSectionDirectives in 'Src\Shared.LangOptionsSectionDirectives.pas',
   Shared.SetupMessageIDs in 'Src\Shared.SetupMessageIDs.pas',
   Shared.SetupEntFunc in 'Src\Shared.SetupEntFunc.pas',
   Shared.SetupSectionDirectives in 'Src\Shared.SetupSectionDirectives.pas',
   Shared.SetupTypes in 'Src\Shared.SetupTypes.pas',
+  Shared.SetupSteps in 'Src\Shared.SetupSteps.pas',
   SimpleExpression in '..\Components\SimpleExpression.pas',
-  MD5 in '..\Components\MD5.pas',
-  Shared.DotNetVersion in 'Src\Shared.DotNetVersion.pas';
+  Shared.DotNetVersion in 'Src\Shared.DotNetVersion.pas',
+  PBKDF2 in '..\Components\PBKDF2.pas';
 
 {$IMAGEBASE $00800000}
 {$SETPEOSVERSION 6.1}

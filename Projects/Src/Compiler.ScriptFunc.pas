@@ -22,7 +22,7 @@ implementation
 uses
   Windows, SysUtils, TypInfo,
   Shared.CommonFunc, Shared.SetupMessageIDs, Shared.Struct,
-  Shared.SetupTypes, Shared.ScriptFunc, Compiler.Messages, Shared.DotNetVersion;
+  Shared.SetupTypes, Shared.SetupSteps, Shared.ScriptFunc, Compiler.Messages, Shared.DotNetVersion;
 
 { This type copied from CmnFunc.pas. We don't actually 'use' CmnFunc since
   it would cause VCL units to be linked in. }
@@ -105,6 +105,8 @@ begin
   RegisterRealEnum('TSetupProcessorArchitecture', TypeInfo(TSetupProcessorArchitecture));
   RegisterRealEnum('TDotNetVersion', TypeInfo(TDotNetVersion));
 
+  RegisterType('TSplitType', '(stAll, stExcludeEmpty, stExcludeLastEmpty)'); //must be compatible with System.SysUtils.TStringSplitOptions
+
   RegisterType('TExecWait', '(ewNoWait, ewWaitUntilTerminated, ewWaitUntilIdle)');
 
   RegisterType('TExecOutput',
@@ -138,7 +140,8 @@ begin
     '  SuiteMask: Word;' +
     'end');
 
-  RegisterType('TOnDownloadProgress', 'function(const Url, FileName: string; const Progress, ProgressMax: Int64): Boolean;');
+  RegisterType('TOnDownloadProgress', 'function(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;');
+  RegisterType('TOnExtractionProgress', 'function(const ArchiveName, FileName: String; const Progress, ProgressMax: Int64): Boolean;');
   RegisterType('TOnLog', 'procedure(const S: String; const Error, FirstLine: Boolean);');
 
   for var ScriptFuncTable in ScriptFuncTables do
