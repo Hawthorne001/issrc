@@ -2,7 +2,7 @@ unit Compiler.SetupCompiler;
 
 {
   Inno Setup
-  Copyright (C) 1997-2024 Jordan Russell
+  Copyright (C) 1997-2025 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -19,7 +19,7 @@ interface
 
 uses
   Windows, SysUtils, Classes, Generics.Collections,
-  SimpleExpression,
+  SimpleExpression, SHA256, ChaCha20,
   Shared.Struct, Shared.CompilerInt, Shared.PreprocInt, Shared.SetupMessageIDs,
   Shared.SetupSectionDirectives, Shared.VerInfoFunc, Shared.Int64Em, Shared.DebugStruct,
   Compiler.ScriptCompiler, Compiler.StringLists, Compression.LZMACompressor;
@@ -111,7 +111,8 @@ type
     InternalCompressProps, CompressProps: TLZMACompressorProps;
     UseSolidCompression: Boolean;
     DontMergeDuplicateFiles: Boolean;
-    CryptKey: String;
+    Password: String;
+    CryptKey: TSetupEncryptionKey;
     TimeStampsInUTC: Boolean;
     TimeStampRounding: Integer;
     TouchDateOption: (tdCurrent, tdNone, tdExplicit);
@@ -122,7 +123,7 @@ type
     SetupHeader: TSetupHeader;
 
     SetupDirectiveLines: array[TSetupSectionDirective] of Integer;
-    UseSetupLdr, DiskSpanning, BackSolid, TerminalServicesAware, DEPCompatible, ASLRCompatible: Boolean;
+    UseSetupLdr, DiskSpanning, TerminalServicesAware, DEPCompatible, ASLRCompatible: Boolean;
     DiskSliceSize, DiskClusterSize, SlicesPerDisk, ReserveBytes: Longint;
     LicenseFile, InfoBeforeFile, InfoAfterFile, WizardImageFile: String;
     WizardSmallImageFile: String;
@@ -271,7 +272,7 @@ type
     function GetDebugInfo: TMemoryStream;
     function GetDiskSliceSize:Longint;
     function GetDiskSpanning: Boolean;
-    function GetEncryptionBaseNonce: TSetupNonce;
+    function GetEncryptionBaseNonce: TSetupEncryptionNonce;
     function GetExeFilename: String;
     function GetLineFilename: String;
     function GetLineNumber: Integer;
@@ -291,7 +292,7 @@ implementation
 uses
   Commctrl, TypInfo, AnsiStrings, Math, WideStrUtils,
   PathFunc, Shared.CommonFunc, Compiler.Messages, Shared.SetupEntFunc,
-  Shared.FileClass, Compression.Base, Compression.Zlib, Compression.bzlib, SHA1,
+  Shared.FileClass, Compression.Base, Compression.Zlib, Compression.bzlib,
   Shared.LangOptionsSectionDirectives, Shared.ResUpdateFunc, Compiler.ExeUpdateFunc,
 {$IFDEF STATICPREPROC}
   ISPP.Preprocess,
@@ -597,7 +598,7 @@ begin
   Result := DiskSpanning;
 end;
 
-function TSetupCompiler.GetEncryptionBaseNonce: TSetupNonce;
+function TSetupCompiler.GetEncryptionBaseNonce: TSetupEncryptionNonce;
 begin
   Result := SetupHeader.EncryptionBaseNonce;
 end;
@@ -1652,8 +1653,8 @@ function TSetupCompiler.CheckConst(const S: String; const MinVersion: TSetupVers
 const
   UserConsts: array[0..0] of String = (
     'username');
-  Consts: array[0..42] of String = (
-    'src', 'srcexe', 'tmp', 'app', 'win', 'sys', 'sd', 'groupname', 'commonfonts', 'hwnd',
+  Consts: array[0..41] of String = (
+    'src', 'srcexe', 'tmp', 'app', 'win', 'sys', 'sd', 'groupname', 'commonfonts',
     'commonpf', 'commonpf32', 'commonpf64', 'commoncf', 'commoncf32', 'commoncf64',
     'autopf', 'autopf32', 'autopf64', 'autocf', 'autocf32', 'autocf64',
     'computername', 'dao', 'cmd', 'wizardhwnd', 'sysuserinfoname', 'sysuserinfoorg',
@@ -2350,29 +2351,6 @@ var
     end;
   end;
 
-  procedure GeneratePasswordHashAndSalt(const Password: String;
-    var Hash: TSHA1Digest; var Salt: TSetupSalt);
-  var
-    Context: TSHA1Context;
-  begin
-    { Random salt is mixed into the password hash to make it more difficult
-      for someone to tell that two installations use the same password. A
-      fixed string is also mixed in "just in case" the system's RNG is
-      broken -- this hash must never be the same as the hash used for
-      encryption. }
-    GenerateRandomBytes(Salt, SizeOf(Salt));
-    SHA1Init(Context);
-    SHA1Update(Context, PAnsiChar('PasswordCheckHash')^, Length('PasswordCheckHash'));
-    SHA1Update(Context, Salt, SizeOf(Salt));
-    SHA1Update(Context, Pointer(Password)^, Length(Password)*SizeOf(Password[1]));
-    Hash := SHA1Final(Context);
-  end;
-
-  procedure GenerateEncryptionBaseNonce(var Nonce: TSetupNonce);
-  begin
-    GenerateRandomBytes(Nonce, SizeOf(Nonce));
-  end;
-
   procedure StrToTouchDate(const S: String);
   var
     P: PChar;
@@ -2601,30 +2579,11 @@ begin
     ssASLRCompatible: begin
         ASLRCompatible := StrToBool(Value);
       end;
-    ssBackColor: begin
-        try
-          SetupHeader.BackColor := StringToColor(Value);
-        except
-          Invalid;
-        end;
-      end;
-    ssBackColor2: begin
-        try
-          SetupHeader.BackColor2 := StringToColor(Value);
-        except
-          Invalid;
-        end;
-      end;
-    ssBackColorDirection: begin
-        if CompareText(Value, 'toptobottom') = 0 then
-          Exclude(SetupHeader.Options, shBackColorHorizontal)
-        else if CompareText(Value, 'lefttoright') = 0 then
-          Include(SetupHeader.Options, shBackColorHorizontal)
-        else
-          Invalid;
-      end;
+    ssBackColor,
+    ssBackColor2,
+    ssBackColorDirection,
     ssBackSolid: begin
-        BackSolid := StrToBool(Value);
+        WarningsList.Add(Format(SCompilerEntryObsolete, ['Setup', KeyName]));
       end;
     ssChangesAssociations: begin
         SetupHeader.ChangesAssociations := Value;
@@ -2641,14 +2600,17 @@ begin
           Exclude(SetupHeader.Options, shForceCloseApplications);
         end;
       end;
-    ssCloseApplicationsFilter: begin
+    ssCloseApplicationsFilter, ssCloseApplicationsFilterExcludes: begin
         if Value = '' then
           Invalid;
         AIncludes := TStringList.Create;
         try
           ProcessWildcardsParameter(Value, AIncludes,
-            Format(SCompilerDirectivePatternTooLong, ['CloseApplicationsFilter']));
-          SetupHeader.CloseApplicationsFilter := StringsToCommaString(AIncludes);
+            Format(SCompilerDirectivePatternTooLong, [KeyName]));
+          if Directive = ssCloseApplicationsFilter then
+            SetupHeader.CloseApplicationsFilter := StringsToCommaString(AIncludes)
+          else
+            SetupHeader.CloseApplicationsFilterExcludes := StringsToCommaString(AIncludes);
         finally
           AIncludes.Free;
         end;
@@ -2813,11 +2775,19 @@ begin
     ssEnableDirDoesntExistWarning: begin
         SetSetupHeaderOption(shEnableDirDoesntExistWarning);
       end;
-    ssEncryption:
-      begin
+    ssEncryption: begin
         SetSetupHeaderOption(shEncryptionUsed);
-        if shEncryptionUsed in SetupHeader.Options then
-          GenerateEncryptionBaseNonce(SetupHeader.EncryptionBaseNonce);
+      end;
+    ssEncryptionKeyDerivation: begin
+        if Value = 'pbkdf2' then
+          SetupHeader.EncryptionKDFIterations := 200000
+        else if Copy(Value, 1, 7) = 'pbkdf2/' then begin
+          I := StrToIntDef(Copy(Value, 8, Maxint), -1);
+          if I < 1 then
+            Invalid;
+          SetupHeader.EncryptionKDFIterations := I;
+        end else
+          Invalid;
       end;
     ssExtraDiskSpaceRequired: begin
         if not StrToInteger64(Value, SetupHeader.ExtraDiskSpaceRequired) then
@@ -2928,12 +2898,7 @@ begin
         OutputManifestFile := Value;
       end;
     ssPassword: begin
-        if Value <> '' then begin
-          CryptKey := Value;
-          GeneratePasswordHashAndSalt(Value, SetupHeader.PasswordHash,
-            SetupHeader.PasswordSalt);
-          Include(SetupHeader.Options, shPassword);
-        end;
+        Password := Value;
       end;
     ssPrivilegesRequired: begin
         if CompareText(Value, 'none') = 0 then
@@ -3172,17 +3137,11 @@ begin
         if not StrToVersionNumbers(Value, VersionInfoVersion) then
           Invalid;
       end;
-    ssWindowResizable: begin
-        SetSetupHeaderOption(shWindowResizable);
-      end;
-    ssWindowShowCaption: begin
-        SetSetupHeaderOption(shWindowShowCaption);
-      end;
-    ssWindowStartMaximized: begin
-        SetSetupHeaderOption(shWindowStartMaximized);
-      end;
+    ssWindowResizable,
+    ssWindowShowCaption,
+    ssWindowStartMaximized,
     ssWindowVisible: begin
-        SetSetupHeaderOption(shWindowVisible);
+        WarningsList.Add(Format(SCompilerEntryObsolete, ['Setup', KeyName]));
       end;
     ssWizardImageAlphaFormat: begin
         if CompareText(Value, 'none') = 0 then
@@ -3828,7 +3787,7 @@ var
   MenuKeyCaps: array[TMenuKeyCap] of string = (
     'BkSp', 'Tab', 'Esc', 'Enter', 'Space', 'PgUp',
     'PgDn', 'End', 'Home', 'Left', 'Up', 'Right',
-    'Down', 'Ins', 'Del', 'Shift', 'Ctrl+', 'Alt+');
+    'Down', 'Ins', 'Del', 'Shift+', 'Ctrl+', 'Alt+');
 
 procedure TSetupCompiler.EnumIconsProc(const Line: PChar; const Ext: Integer);
 
@@ -6999,7 +6958,7 @@ var
             Include(FL.Flags, foCallInstructionOptimized);
 
           CH.CompressFile(SourceFile, FL.OriginalSize,
-            foCallInstructionOptimized in FL.Flags, FL.SHA1Sum);
+            foCallInstructionOptimized in FL.Flags, FL.SHA256Sum);
         finally
           SourceFile.Free;
         end;
@@ -7125,7 +7084,7 @@ var
       end;
     end else begin
       Filename := SignedUninstallerDir + Format('uninst-%s-%s.e32', [SetupVersion,
-        Copy(SHA1DigestToString(SHA1Buf(UnsignedFile.Memory^, UnsignedFileSize)), 1, 10)]);
+        Copy(SHA256DigestToString(SHA256Buf(UnsignedFile.Memory^, UnsignedFileSize)), 1, 10)]);
 
       if not NewFileExists(Filename) then begin
         { Create new signed uninstaller file }
@@ -7272,7 +7231,7 @@ var
       fdCreateAlways, faWrite, fsRead);
     try
       S := 'Index' + #9 + 'SourceFilename' + #9 + 'TimeStamp' + #9 +
-        'Version' + #9 + 'SHA1Sum' + #9 + 'OriginalSize' + #9 +
+        'Version' + #9 + 'SHA256Sum' + #9 + 'OriginalSize' + #9 +
         'FirstSlice' + #9 + 'LastSlice' + #9 + 'StartOffset' + #9 +
         'ChunkSuboffset' + #9 + 'ChunkCompressedSize' + #9 + 'Encrypted';
       F.WriteLine(S);
@@ -7285,7 +7244,7 @@ var
           S := S + Format('%u.%u.%u.%u', [FL.FileVersionMS shr 16,
             FL.FileVersionMS and $FFFF, FL.FileVersionLS shr 16,
             FL.FileVersionLS and $FFFF]);
-        S := S + #9 + SHA1DigestToString(FL.SHA1Sum) + #9 +
+        S := S + #9 + SHA256DigestToString(FL.SHA256Sum) + #9 +
           Integer64ToStr(FL.OriginalSize) + #9 +
           SliceToString(FL.FirstSlice) + #9 +
           SliceToString(FL.LastSlice) + #9 +
@@ -7318,6 +7277,31 @@ var
   begin
     GetSystemTimeAsFileTime(FT);
     SetFileTime(H, nil, nil, @FT);
+  end;
+
+  procedure GenerateEncryptionKDFSalt(out Salt: TSetupKDFSalt);
+  begin
+    GenerateRandomBytes(Salt, SizeOf(Salt));
+  end;
+
+  procedure GenerateEncryptionBaseNonce(out Nonce: TSetupEncryptionNonce);
+  begin
+    GenerateRandomBytes(Nonce, SizeOf(Nonce));
+  end;
+
+  { This function assumes EncryptionKey is based on the password }
+  procedure GeneratePasswordTest(const EncryptionKey: TSetupEncryptionKey;
+    const EncryptionBaseNonce: TSetupEncryptionNonce; out PasswordTest: Integer);
+  begin
+    { Create a special nonce that cannot collide with encrypted-file nonces }
+    var Nonce := EncryptionBaseNonce;
+    Nonce.RandomXorFirstSlice := Nonce.RandomXorFirstSlice xor -1;
+
+    { Encrypt a value of 0 so Setup can do same and compare the results to test the password }
+    var Context: TChaCha20Context;
+    XChaCha20Init(Context, EncryptionKey[0], Length(EncryptionKey), Nonce, SizeOf(Nonce), 0);
+    PasswordTest := 0;
+    XChaCha20Crypt(Context, PasswordTest, PasswordTest, SizeOf(PasswordTest));
   end;
 
 const
@@ -7379,7 +7363,6 @@ begin
     SetupHeader.MinVersion.NTVersion := $06010000;
     SetupHeader.MinVersion.NTServicePack := $100;
     SetupHeader.Options := [shDisableStartupPrompt, shCreateAppDir,
-      shWindowStartMaximized, shWindowShowCaption, shWindowResizable,
       shUsePreviousAppDir, shUsePreviousGroup,
       shUsePreviousSetupType, shAlwaysShowComponentsList, shFlatComponentsList,
       shShowComponentSizes, shUsePreviousTasks, shUpdateUninstallLogAppName,
@@ -7392,15 +7375,12 @@ begin
     SetupHeader.UninstallFilesDir := '{app}';
     SetupHeader.DefaultUserInfoName := '{sysuserinfoname}';
     SetupHeader.DefaultUserInfoOrg := '{sysuserinfoorg}';
-    SetupHeader.BackColor := clBlue;
-    SetupHeader.BackColor2 := clBlack;
     SetupHeader.DisableDirPage := dpAuto;
     SetupHeader.DisableProgramGroupPage := dpAuto;
     SetupHeader.CreateUninstallRegKey := 'yes';
     SetupHeader.Uninstallable := 'yes';
     SetupHeader.ChangesEnvironment := 'no';
     SetupHeader.ChangesAssociations := 'no';
-    BackSolid := False;
     DefaultDialogFontName := 'Tahoma';
     SignToolRetryCount := 2;
     SignToolRetryDelay := 500;
@@ -7411,6 +7391,7 @@ begin
     NotRecognizedMessagesWarning := True;
     UsedUserAreasWarning := True;
     SetupHeader.WizardStyle := wsClassic;
+    SetupHeader.EncryptionKDFIterations := 200000;
 
     { Read [Setup] section }
     EnumIniSection(EnumSetupProc, 'Setup', 0, True, True, '', False, False);
@@ -7498,8 +7479,6 @@ begin
     CheckConst(SetupHeader.DefaultUserInfoOrg, SetupHeader.MinVersion, []);
     LineNumber := SetupDirectiveLines[ssDefaultUserInfoSerial];
     CheckConst(SetupHeader.DefaultUserInfoSerial, SetupHeader.MinVersion, []);
-    if BackSolid then
-      SetupHeader.BackColor2 := SetupHeader.BackColor;
     if not DiskSpanning then begin
       DiskSliceSize := MaxDiskSliceSize;
       DiskClusterSize := 1;
@@ -7559,7 +7538,7 @@ begin
       else
         VersionInfoProductTextVersion := VersionInfoProductVersionOriginalValue;
     end;
-    if (shEncryptionUsed in SetupHeader.Options) and (CryptKey = '') then begin
+    if (shEncryptionUsed in SetupHeader.Options) and (Password = '') then begin
       LineNumber := SetupDirectiveLines[ssEncryption];
       AbortCompileFmt(SCompilerEntryMissing2, ['Setup', 'Password']);
     end;
@@ -7629,6 +7608,14 @@ begin
       SignedUninstallerDir := AddBackslash(SignedUninstallerDir);
     end;
 
+    if Password <> '' then begin
+      GenerateEncryptionKDFSalt(SetupHeader.EncryptionKDFSalt);
+      GenerateEncryptionKey(Password,  SetupHeader.EncryptionKDFSalt, SetupHeader.EncryptionKDFIterations, CryptKey);
+      GenerateEncryptionBaseNonce(SetupHeader.EncryptionBaseNonce);
+      GeneratePasswordTest(CryptKey, SetupHeader.EncryptionBaseNonce, SetupHeader.PasswordTest);
+      Include(SetupHeader.Options, shPassword);
+    end;
+
     { Read text files }
     if LicenseFile <> '' then begin
       LineNumber := SetupDirectiveLines[ssLicenseFile];
@@ -7658,7 +7645,7 @@ begin
       end;
       WizardImages := CreateMemoryStreamsFromFiles('WizardImageFile', WizardImageFile)
     end else
-      WizardImages := CreateMemoryStreamsFromResources(['WizardImage'], ['100', '150']);
+      WizardImages := CreateMemoryStreamsFromResources(['WizardImage'], ['150']);
     LineNumber := SetupDirectiveLines[ssWizardSmallImageFile];
     AddStatus(Format(SCompilerStatusReadingFile, ['WizardSmallImageFile']));
     if WizardSmallImageFile <> '' then begin
@@ -7668,7 +7655,7 @@ begin
       end;
       WizardSmallImages := CreateMemoryStreamsFromFiles('WizardSmallImage', WizardSmallImageFile)
     end else
-      WizardSmallImages := CreateMemoryStreamsFromResources(['WizardSmallImage'], ['100', '125', '150', '175', '200', '225', '250']);
+      WizardSmallImages := CreateMemoryStreamsFromResources(['WizardSmallImage'], ['250']);
     LineNumber := 0;
 
     { Prepare Setup executable & signed uninstaller data }
@@ -8029,8 +8016,8 @@ begin
     AddStatus('');
     for I := 0 to WarningsList.Count-1 do
       AddStatus(SCompilerStatusWarning + WarningsList[I], True);
-    asm jmp @1; db 0,'Inno Setup Compiler, Copyright (C) 1997-2024 Jordan Russell, '
-                  db 'Portions Copyright (C) 2000-2024 Martijn Laan',0; @1: end;
+    asm jmp @1; db 0,'Inno Setup Compiler, Copyright (C) 1997-2025 Jordan Russell, '
+                  db 'Portions Copyright (C) 2000-2025 Martijn Laan',0; @1: end;
     { Note: Removing or modifying the copyright text is a violation of the
       Inno Setup license agreement; see LICENSE.TXT. }
   finally

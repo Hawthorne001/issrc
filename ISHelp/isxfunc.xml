@@ -73,7 +73,9 @@ end;</pre></example>
       <function>
         <name>SetupMessage</name>
         <prototype>function SetupMessage(const ID: TSetupMessageID): String;</prototype>
-        <description><p>Returns the value of the specified message.</p></description>
+        <description><p>Returns the value of the specified message.</p>
+<p>TSetupMessageID is defined as:</p>
+<p>'msg' + the message name. Example: <i>SetupMessage(msgSetupAppTitle)</i></p></description>
         <example><pre>var
   S: String;
 begin
@@ -233,6 +235,12 @@ end;</pre></example>
         <prototype>function Terminated: Boolean;</prototype>
         <description><p>Returns True if Setup or Uninstall is terminating, False otherwise.</p></description>
       </function>
+      <function>
+        <name>Debugging</name>
+        <prototype>function Debugging: Boolean;</prototype>
+        <description><p>Returns True if Setup or Uninstall is being debugged by the Compiler IDE or another application, False otherwise.</p></description>
+        <seealso><p><link topic="scriptdebug">Run-time debugger</link></p></seealso>
+      </function>
     </subcategory>
     <subcategory>
       <function>
@@ -259,12 +267,6 @@ end;</pre></example>
         <prototype>function GetUninstallProgressForm: TUninstallProgressForm;</prototype>
         <description><p>Returns the <tt>UninstallProgressForm</tt> support object, or raises an internal error if the object has not yet been created.</p></description>
         <seealso><p><link topic="scriptclasses" anchor="UninstallProgressForm">UninstallProgressForm</link></p></seealso>
-      </function>
-      <function>
-        <name>GetMainForm</name>
-        <prototype>function GetMainForm: TMainForm;</prototype>
-        <description><p>Returns the <tt>MainForm</tt> support object, or raises an internal error if the object has not yet been created.</p></description>
-        <seealso><p><link topic="scriptclasses" anchor="MainForm">MainForm</link></p></seealso>
       </function>
     </subcategory>
   </category>
@@ -561,10 +563,10 @@ end;</pre></example>
         <prototype>function IsDotNetInstalled(const MinVersion: TDotNetVersion; const MinServicePack: Cardinal): Boolean;</prototype>
         <description><p>Returns True if the .NET Framework with the specified MinVersion and MinServicePack parameters is installed.</p>
 <p>TDotNetVersion is defined as:</p>
-<p><tt>TDotNetVersion = (net11, net20, net30, net35, net4Client, net4Full, net45, net451, net452, net46, net461, net462, net47, net471, net472, net48);</tt></p></description>
+<p><tt>TDotNetVersion = (net11, net20, net30, net35, net4Client, net4Full, net45, net451, net452, net46, net461, net462, net47, net471, net472, net48, net481);</tt></p></description>
         <example><pre>function InitializeSetup: Boolean;
 begin
-  Result := IsDotNetInstalled(net462, 0); //Returns True if .NET Framework version 4.6.2 is installed, or a compatible version such as 4.8
+  Result := IsDotNetInstalled(net462, 0); //Returns True if .NET Framework version 4.6.2 is installed, or a compatible version such as 4.8.1
   if not Result then
     SuppressibleMsgBox(FmtMessage(SetupMessage(msgWinVersionTooLowError), ['.NET Framework', '4.6.2']), mbCriticalError, MB_OK, IDOK);
 end;</pre></example>
@@ -930,6 +932,50 @@ end;</pre></example>
         <name>TrimRight</name>
         <prototype>function TrimRight(const S: String): String;</prototype>
         <description><p>Trims trailing spaces and control characters from the given string S.</p></description>
+      </function>
+      <function>
+        <name>StringJoin</name>
+        <prototype>function StringJoin(const Separator: String; const Values: TArrayOfString): String;</prototype>
+        <description><p>Joins two or more strings together separated by the given separator.</p></description>
+        <example><pre>var
+  S: String;
+begin
+  S := StringJoin(',', ['1', '2']);
+  // S = '1,2'
+end;
+</pre></example>
+        <seealso><p><link topic="isxfunc_StringSplit">StringSplit</link></p></seealso>
+      </function>
+      <function>
+        <name>StringSplit</name>
+        <prototype>function StringSplit(const S: String; const Separators: TArrayOfString; const Typ: TSplitType): TArrayOfString;</prototype>
+        <description><p>Splits the given string into substrings, using the given characters or strings to be used as separator. Empty substrings can be ignored.</p>
+<p>TSplitType is defined as:</p>
+<p><tt>TSplitType = (stAll, stExcludeEmpty, stExcludeLastEmpty);</tt></p></description>
+        <example><pre>var
+  A: array of String;
+begin
+  A := StringSplit('1,,2', [','], stExcludeEmpty);
+  // A = ['1','2']
+end;
+</pre></example>
+        <seealso><p><link topic="isxfunc_StringJoin">StringJoin</link><br />
+<link topic="isxfunc_StringSplitEx">StringSplitEx</link></p></seealso>
+      </function>
+      <function>
+        <name>StringSplitEx</name>
+        <prototype>function StringSplitEx(const S: String; const Separators: TArrayOfString; const Quote: Char; const Typ: TSplitType): TArrayOfString;</prototype>
+        <description><p>Splits the given string into substrings, using the given characters or strings to be used as separator. Empty substrings can be ignored. Use the Quote parameter to specify the start and end character of a quoted part of the string where separators are ignored.</p>
+<p>TSplitType is defined as:</p>
+<p><tt>TSplitType = (stAll, stExcludeEmpty, stExcludeLastEmpty);</tt></p></description>
+        <example><pre>var
+  A: array of String;
+begin
+  A := StringSplitEx('1,",",2', [','], '"', stAll);
+  // A = ['1','","','2']
+end;
+</pre></example>
+        <seealso><p><link topic="isxfunc_StringSplit">StringSplit</link></p></seealso>
       </function>
     </subcategory>
     <subcategory>
@@ -1789,7 +1835,8 @@ end;</pre></example>
 <link topic="isxfunc_DownloadTemporaryFileSize">DownloadTemporaryFileSize</link><br />
 <link topic="isxfunc_DownloadTemporaryFileDate">DownloadTemporaryFileDate</link><br />
 <link topic="isxfunc_CreateDownloadPage">CreateDownloadPage</link><br />
-<link topic="isxfunc_ExtractTemporaryFile">ExtractTemporaryFile</link></p></seealso>
+<link topic="isxfunc_ExtractTemporaryFile">ExtractTemporaryFile</link><br />
+<link topic="isxfunc_Extract7ZipArchive">Extract7ZipArchive</link></p></seealso>
         <example><pre>
 [Code]
 function OnDownloadProgress(const Url, Filename: String; const Progress, ProgressMax: Int64): Boolean;
@@ -1833,6 +1880,37 @@ end;</pre>
         <description><p>Returns the last modified date of the file from the specified URL, without downloading the file. If the server does not provide the last modified file date, '' will be returned.</p>
 <p>An exception will be raised if there was an error.</p>
 <p>See <link topic="isxfunc_DownloadTemporaryFile">DownloadTemporaryFile</link> for other considerations.</p></description>
+      </function>
+      <function>
+        <name>Extract7ZipArchive</name>
+        <prototype>procedure Extract7ZipArchive(const ArchiveFileName, DestDir: String; const FullPaths: Boolean; const OnExtractionProgress: TOnExtractionProgress);</prototype>
+        <description><p>Extracts the specified 7-Zip archive to the specified directory, with or without using path names.</p>
+<p>An exception will be raised if there was an error.</p>
+<p>The archive must not be encrypted.</p>
+<p>Set OnExtractionProgress to a function to be informed of progress, or <tt>nil</tt> otherwise.</p></description>
+        <remarks><p>TOnExtractionProgress is defined as:</p>
+<p><tt>TOnExtractionProgress = function(const ArchiveName, FileName: String; const Progress, ProgressMax: Int64): Boolean;</tt></p>
+<p>Return True to allow the extraction to continue, False otherwise.</p>
+<p><tt>Extract7ZipArchive</tt> uses an embedded version of the &quot;7z ANSI-C Decoder&quot; from the LZMA SDK by Igor Pavlov, as-is, except that Unicode support and error messages were improved and that it outputs memory requirements.</p>
+<p>All output of the decoder is logged if logging is enabled, including error messages but excluding empty lines.</p>
+<p>The decoder has the following limitations, as written by Igor Pavlov in the LZMA SDK:</p>
+<ul>
+<li>It reads only &quot;FileName&quot;, &quot;Size&quot;, &quot;LastWriteTime&quot; and &quot;CRC&quot; information for each file in archive.</li>
+<li>It does not support PPMd and BZip2 methods.</li>
+<li>It converts original UTF-16 Unicode file names to UTF-8 Unicode file names.</li>
+<li>It decodes whole solid block from 7z archive to RAM. The RAM consumption can be high.</li>
+</ul>
+<p>To expand on his comments about RAM consumption: When extracting a file, at least enough memory will always be allocated to hold the entire file, regardless of the block size. For example, extracting a 1 GB file using <tt>Extract7ZipArchive</tt> requires at least 1 GB of RAM. Consider using a different solution for extracting large files, such as embedding 7-Zip itself, which does not use as much RAM, into your installation.</p>
+<p>Additionally he wrote:</p>
+<ul>
+<li>You can create .7z archive with 7z.exe, 7za.exe or 7zr.exe:<br />
+<tt>7z.exe a archive.7z *.htm -r -mx -m0fb=255</tt></li>
+</ul>
+</remarks>
+        <seealso><p><link topic="isxfunc_CreateExtractionPage">CreateExtractionPage</link><br />
+<link topic="isxfunc_CreateDownloadPage">CreateDownloadPage</link><br />
+<link topic="isxfunc_DownloadTemporaryFile">DownloadTemporaryFile</link><br />
+<link topic="isxfunc_ExtractTemporaryFile">ExtractTemporaryFile</link></p></seealso>
       </function>
     </subcategory>
     <subcategory>
@@ -2182,14 +2260,11 @@ end;</pre></example>
         <description><p>Opens the specified registry key and reads the names of its subkeys into the specified string array Names. Returns True if successful, False otherwise.</p></description>
         <example><pre>var
   Names: TArrayOfString;
-  I: Integer;
   S: String;
 begin
   if RegGetSubkeyNames(HKEY_CURRENT_USER, 'Control Panel', Names) then
   begin
-    S := '';
-    for I := 0 to GetArrayLength(Names)-1 do
-      S := S + Names[I] + #13#10;
+    S := StringJoin(#13#10, Names);
     MsgBox('List of subkeys:'#13#10#13#10 + S, mbInformation, MB_OK);
   end else
   begin
@@ -2203,14 +2278,11 @@ end;</pre></example>
         <description><p>Opens the specified registry key and reads the names of its values into the specified string array Names. Returns True if successful, False otherwise.</p></description>
         <example><pre>var
   Names: TArrayOfString;
-  I: Integer;
   S: String;
 begin
   if RegGetValueNames(HKEY_CURRENT_USER, 'Control Panel\Mouse', Names) then
   begin
-    S := '';
-    for I := 0 to GetArrayLength(Names)-1 do
-      S := S + Names[I] + #13#10;
+    S := StringJoin(#13#10, Names);
     MsgBox('List of values:'#13#10#13#10 + S, mbInformation, MB_OK);
   end else
   begin
@@ -2599,6 +2671,23 @@ Page := CreateOutputMsgMemoPage(wpWelcome,
 <link topic="isxfunc_CreateOutputProgressPage">CreateOutputProgressPage</link></p></seealso>
       </function>
       <function>
+        <name>CreateExtractionPage</name>
+        <prototype>function CreateExtractionPage(const ACaption, ADescription: String; const OnExtractionProgress: TOnExtractionProgress): ExtractionWizardPage;</prototype>
+        <description><p>Creates a wizard page to extract 7-Zip archives and show progress.</p>
+<p>Set OnExtractionProgress to a function to be informed of progress, or <tt>nil</tt> otherwise.</p>    
+<p>Unlike the other types of wizard pages, progress pages are not displayed as part of the normal page sequence (note that there is no <tt>AfterID</tt> parameter). A progress page can only be displayed programmatically by calling its <tt>Show</tt> method.</p></description>
+        <remarks><p>Call the <tt>Show</tt> method to activate and show the page. When you're finished with it, call the <tt>Hide</tt> method to revert to the previous page.</p>
+<p>Always put the <tt>Hide</tt> call inside the <tt>finally</tt> part of a <tt>try..finally</tt> language construct, as demonstrated in <i>CodeDownloadFiles.iss</i>. Not calling <tt>Hide</tt> will result in the wizard being permanently stuck on the progress page.</p>
+<p>To add a new archive to extract, call the <tt>Add</tt> method. Always call the <tt>Clear</tt> method before adding the first file.</p>
+<p>To start the extraction, call the <tt>Extract</tt> method. An exception will be raised if there was an error. Otherwise, <tt>Extract</tt> returns the number of archives extracted.</p>
+<p>Set the <tt>ShowArchiveInsteadFile</tt> property to <tt>True</tt> to show the name of the archive which is being extracted to the user instead of the names of the files inside the archive.</p>
+<p>See <link topic="isxfunc_Extract7ZipArchive">Extract7ZipArchive</link> for other considerations and the definition of <tt>TOnExtractionProgress</tt>.</p></remarks>
+        <example><p>See <i>CodeDownloadFiles.iss</i> for an example of <tt>CreateDownloadPage</tt> which works very similar to <tt>CreateExtractionPage</tt>.</p></example>
+        <seealso><p><link topic="scriptclasses" anchor="TExtractionWizardPage">TExtractionWizardPage</link><br />
+<link topic="isxfunc_Extract7ZipArchive">Extract7ZipArchive</link><br />
+<link topic="isxfunc_CreateOutputProgressPage">CreateOutputProgressPage</link></p></seealso>
+      </function>
+      <function>
         <name>CreateCustomPage</name>
         <prototype>function CreateCustomPage(const AfterID: Integer; const ACaption, ADescription: String): TWizardPage;</prototype>
         <description><p>Creates a custom wizard page. The page is empty by default; you have to create your own controls afterward and place them on the page (by setting their Parent properties to the Surface property of the <link topic="scriptclasses" anchor="TWizardPage">TWizardPage</link> instance returned by this function).</p></description>
@@ -2644,12 +2733,12 @@ end;</pre></example>
       <function>
         <name>ScaleX</name>
         <prototype>function ScaleX(X: Integer): Integer;</prototype>
-        <description><p>Takes an X coordinate or width and returns it scaled to fit the size of the current dialog font. If the dialog font is 8-point MS Sans Serif and the user is running Windows in Small Fonts (96 dpi), then X is returned unchanged.</p></description>
+        <description><p>Takes an X coordinate or width and returns it scaled to fit the size of the current dialog font. If the dialog font is 8-point MS Sans Serif and the user is running Windows in 100% DPI (96 dpi), then X is returned unchanged.</p></description>
       </function>
       <function>
         <name>ScaleY</name>
         <prototype>function ScaleY(Y: Integer): Integer;</prototype>
-        <description><p>Takes a Y coordinate or height and returns it scaled to fit the size of the current dialog font. If the dialog font is 8-point MS Sans Serif and the user is running Windows in Small Fonts (96 dpi), then Y is returned unchanged.</p></description>
+        <description><p>Takes a Y coordinate or height and returns it scaled to fit the size of the current dialog font. If the dialog font is 8-point MS Sans Serif and the user is running Windows in 100% DPI (96 dpi), then Y is returned unchanged.</p></description>
       </function>
       <function>
         <name>InitializeBitmapImageFromIcon</name>
@@ -3047,20 +3136,8 @@ end;</pre></example>
 </isxfunc>
 <isxenum>
   <enum>
-     <description>CurStep values</description>
-     <values>ssInstall, ssPostInstall, ssDone</values>
-  </enum>
-  <enum>
-     <description>CurPage values</description>
-     <values>wpWelcome, wpLicense, wpPassword, wpInfoBefore, wpUserInfo, wpSelectDir, wpSelectComponents, wpSelectProgramGroup, wpSelectTasks, wpReady, wpPreparing, wpInstalling, wpInfoAfter, wpFinished</values>
-  </enum>
-  <enum>
      <description>Exec and ShellExec - ShowCmd values</description>
      <values>SW_SHOW, SW_SHOWNORMAL, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE, SW_HIDE</values>
-  </enum>
-  <enum>
-     <description>TMsgBoxType</description>
-     <values>mbInformation, mbConfirmation, mbError, mbCriticalError</values>
   </enum>
   <enum>
      <description>MsgBox - Buttons flags</description>
@@ -3073,10 +3150,6 @@ end;</pre></example>
   <enum>
      <description>Reg* - RootKey values (also see the <link topic="registrysection" window="main">[Registry]</link> section documentation)</description>
      <values>HKEY_AUTO, HKEY_AUTO_32, HKEY_AUTO_64,<br />HKEY_CLASSES_ROOT, HKEY_CLASSES_ROOT_32, HKEY_CLASSES_ROOT_64,<br />HKEY_CURRENT_USER, HKEY_CURRENT_USER_32, HKEY_CURRENT_USER_64,<br />HKEY_LOCAL_MACHINE, HKEY_LOCAL_MACHINE_32, HKEY_LOCAL_MACHINE_64,<br />HKEY_USERS, HKEY_USERS_32, HKEY_USERS_64,<br />HKEY_PERFORMANCE_DATA,<br />HKEY_CURRENT_CONFIG, HKEY_CURRENT_CONFIG_32, HKEY_CURRENT_CONFIG_64,<br />HKEY_DYN_DATA,<br />HKA, HKA32, HKA64, HKCR, HKCR32, HKCR64, HKCU, HKCU32, HKCU64, HKLM, HKLM32, HKLM64, HKU, HKU32, HKU64, HKCC, HKCC32, HKCC64</values>
-  </enum>
-  <enum>
-     <description>TSetupMessageID</description>
-     <values>Use 'msg' + the message name. Example: <i>SetupMessage(msgSetupAppTitle)</i></values>
   </enum>
 </isxenum>
 </isxhelp>

@@ -12,7 +12,7 @@ unit Compiler.CompressionHandler;
 interface
 
 uses
-  SHA1, ChaCha20, Shared.Int64Em, Shared.FileClass, Compression.Base,
+  SHA256, ChaCha20, Shared.Struct, Shared.Int64Em, Shared.FileClass, Compression.Base,
   Compiler.StringLists, Compiler.SetupCompiler;
 
 type
@@ -40,12 +40,12 @@ type
     constructor Create(ACompiler: TSetupCompiler; const InitialSliceFilename: String);
     destructor Destroy; override;
     procedure CompressFile(const SourceFile: TFile; Bytes: Integer64;
-      const CallOptimize: Boolean; var SHA1Sum: TSHA1Digest);
+      const CallOptimize: Boolean; var SHA256Sum: TSHA256Digest);
     procedure EndChunk;
     procedure Finish;
     procedure NewChunk(const ACompressorClass: TCustomCompressorClass;
       const ACompressLevel: Integer; const ACompressorProps: TCompressorProps;
-      const AUseEncryption: Boolean; const ACryptKey: String);
+      const AUseEncryption: Boolean; const ACryptKey: TSetupEncryptionKey);
     procedure ProgressProc(BytesProcessed: Cardinal);
     function ReserveBytesOnSlice(const Bytes: Cardinal): Boolean;
     procedure WriteProc(const Buf; BufSize: Longint);
@@ -61,7 +61,7 @@ type
 implementation
 
 uses
-  SysUtils, Hash, Shared.Struct, Compiler.Messages, Compiler.HelperFunc;
+  SysUtils, Compiler.Messages, Compiler.HelperFunc;
 
 constructor TCompressionHandler.Create(ACompiler: TSetupCompiler;
   const InitialSliceFilename: String);
@@ -161,7 +161,7 @@ end;
 
 procedure TCompressionHandler.NewChunk(const ACompressorClass: TCustomCompressorClass;
   const ACompressLevel: Integer; const ACompressorProps: TCompressorProps;
-  const AUseEncryption: Boolean; const ACryptKey: String);
+  const AUseEncryption: Boolean; const ACryptKey: TSetupEncryptionKey);
 
   procedure SelectCompressor;
   var
@@ -190,15 +190,12 @@ procedure TCompressionHandler.NewChunk(const ACompressorClass: TCustomCompressor
 
   procedure InitEncryption;
   begin
-    { Create an SHA-256 hash of ACryptKey, and use that as the key }
-    var Key := THashSHA2.GetHashBytes(ACryptKey, SHA256);
-
     { Create a unique nonce from the base nonce }
     var Nonce := FCompiler.GetEncryptionBaseNonce;
     Nonce.RandomXorStartOffset := Nonce.RandomXorStartOffset xor FChunkStartOffset;
     Nonce.RandomXorFirstSlice := Nonce.RandomXorFirstSlice xor FChunkFirstSlice;
 
-    XChaCha20Init(FCryptContext, Key[0], Length(Key), Nonce, SizeOf(Nonce), 0);
+    XChaCha20Init(FCryptContext, ACryptKey[0], Length(ACryptKey), Nonce, SizeOf(Nonce), 0);
   end;
 
 var
@@ -234,28 +231,28 @@ end;
 
 procedure TCompressionHandler.EndChunk;
 begin
-  if Assigned(FCompressor) then begin
-    FCompressor.Finish;
-    { In case we didn't get a ProgressProc call after the final block: }
-    FCompiler.SetBytesCompressedSoFar(FInitialBytesCompressedSoFar);
-    FCompiler.AddBytesCompressedSoFar(FChunkBytesRead);
-    FCompiler.CallIdleProc;
-  end;
-
+  if not FChunkStarted then
+    Exit;
   FChunkStarted := False;
+
+  FCompressor.Finish;
+  { In case we didn't get a ProgressProc call after the final block: }
+  FCompiler.SetBytesCompressedSoFar(FInitialBytesCompressedSoFar);
+  FCompiler.AddBytesCompressedSoFar(FChunkBytesRead);
+  FCompiler.CallIdleProc;
 end;
 
 procedure TCompressionHandler.CompressFile(const SourceFile: TFile;
-  Bytes: Integer64; const CallOptimize: Boolean; var SHA1Sum: TSHA1Digest);
+  Bytes: Integer64; const CallOptimize: Boolean; var SHA256Sum: TSHA256Digest);
 var
-  Context: TSHA1Context;
+  Context: TSHA256Context;
   AddrOffset: LongWord;
   BufSize: Cardinal;
   Buf: array[0..65535] of Byte;
   { ^ *must* be the same buffer size used in Setup (TFileExtractor), otherwise
     the TransformCallInstructions call will break }
 begin
-  SHA1Init(Context);
+  SHA256Init(Context);
   AddrOffset := 0;
   while True do begin
     BufSize := SizeOf(Buf);
@@ -267,14 +264,14 @@ begin
     SourceFile.ReadBuffer(Buf, BufSize);
     Inc64(FChunkBytesRead, BufSize);
     Dec64(Bytes, BufSize);
-    SHA1Update(Context, Buf, BufSize);
+    SHA256Update(Context, Buf, BufSize);
     if CallOptimize then begin
       TransformCallInstructions(Buf, BufSize, True, AddrOffset);
       Inc(AddrOffset, BufSize);  { may wrap, but OK }
     end;
     FCompressor.Compress(Buf, BufSize);
   end;
-  SHA1Sum := SHA1Final(Context);
+  SHA256Sum := SHA256Final(Context);
 end;
 
 procedure TCompressionHandler.WriteProc(const Buf; BufSize: Longint);

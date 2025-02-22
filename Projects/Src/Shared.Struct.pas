@@ -2,7 +2,7 @@ unit Shared.Struct;
 
 {
   Inno Setup
-  Copyright (C) 1997-2024 Jordan Russell
+  Copyright (C) 1997-2025 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -13,12 +13,12 @@ unit Shared.Struct;
 interface
 
 uses
-  Windows, Shared.Int64Em, SHA1;
+  Windows, Shared.Int64Em, SHA256;
 
 const
   SetupTitle = 'Inno Setup';
-  SetupVersion = '6.4.0-dev';
-  SetupBinVersion = (6 shl 24) + (4 shl 16) + (0 shl 8) + 0;
+  SetupVersion = '6.4.2-dev';
+  SetupBinVersion = (6 shl 24) + (4 shl 16) + (2 shl 8) + 0;
 
 type
   TSetupID = array[0..63] of AnsiChar;
@@ -33,10 +33,10 @@ const
     this file it's recommended you change SetupID. Any change will do (like
     changing the letters or numbers), as long as your format is
     unrecognizable by the standard Inno Setup. }
-  SetupID: TSetupID = 'Inno Setup Setup Data (6.4.0)';
+  SetupID: TSetupID = 'Inno Setup Setup Data (6.4.2)';
   UninstallLogID: array[Boolean] of TUninstallLogID =
     ('Inno Setup Uninstall Log (b)', 'Inno Setup Uninstall Log (b) 64-bit');
-  MessagesHdrID: TMessagesHdrID = 'Inno Setup Messages (6.0.0) (u)';
+  MessagesHdrID: TMessagesHdrID = 'Inno Setup Messages (6.4.0) (u)';
   MessagesLangOptionsID: TMessagesLangOptionsID = '!mlo!001';
   ZLIBID: TCompID = 'zlb'#26;
   DiskSliceID: TDiskSliceID = 'idska32'#26;
@@ -51,10 +51,9 @@ type
   end;
   TSetupHeaderOption = (shDisableStartupPrompt, shCreateAppDir,
     shAllowNoIcons, shAlwaysRestart, shAlwaysUsePersonalGroup,
-    shWindowVisible, shWindowShowCaption, shWindowResizable,
-    shWindowStartMaximized, shEnableDirDoesntExistWarning,
+    shEnableDirDoesntExistWarning,
     shPassword, shAllowRootDirectory, shDisableFinishedPage, shUsePreviousAppDir,
-    shBackColorHorizontal, shUsePreviousGroup, shUpdateUninstallLogAppName,
+    shUsePreviousGroup, shUpdateUninstallLogAppName,
     shUsePreviousSetupType, shDisableReadyMemo, shAlwaysShowComponentsList,
     shFlatComponentsList, shShowComponentSizes, shUsePreviousTasks,
     shDisableReadyPage, shAlwaysShowDirOnReadyPage, shAlwaysShowGroupOnReadyPage,
@@ -68,8 +67,9 @@ type
     shWizardResizable, shUninstallLogging);
   TSetupLanguageDetectionMethod = (ldUILanguage, ldLocale, ldNone);
   TSetupCompressMethod = (cmStored, cmZip, cmBzip, cmLZMA, cmLZMA2);
-  TSetupSalt = array[0..7] of Byte;
-  TSetupNonce = record
+  TSetupKDFSalt = array[0..15] of Byte;
+  TSetupEncryptionKey = array[0..31] of Byte;
+  TSetupEncryptionNonce = record
     RandomXorStartOffset: Int64;
     RandomXorFirstSlice: Int32;
     RemainingRandom: array[0..2] of Int32;
@@ -86,7 +86,7 @@ const
     ('Unknown', 'x86', 'x64', 'Arm32', 'Arm64');
 
 const
-  SetupHeaderStrings = 32;
+  SetupHeaderStrings = 33;
   SetupHeaderAnsiStrings = 4;
 type
   TSetupHeader = packed record
@@ -97,7 +97,7 @@ type
       DefaultUserInfoSerial, AppReadmeFile, AppContact, AppComments,
       AppModifyPath, CreateUninstallRegKey, Uninstallable, CloseApplicationsFilter,
       SetupMutex, ChangesEnvironment, ChangesAssociations,
-      ArchitecturesAllowed, ArchitecturesInstallIn64BitMode: String;
+      ArchitecturesAllowed, ArchitecturesInstallIn64BitMode, CloseApplicationsFilterExcludes: String;
     LicenseText, InfoBeforeText, InfoAfterText, CompiledCodeText: AnsiString;
     NumLanguageEntries, NumCustomMessageEntries, NumPermissionEntries,
       NumTypeEntries, NumComponentEntries, NumTaskEntries, NumDirEntries,
@@ -105,13 +105,13 @@ type
       NumRegistryEntries, NumInstallDeleteEntries, NumUninstallDeleteEntries,
       NumRunEntries, NumUninstallRunEntries: Integer;
     MinVersion, OnlyBelowVersion: TSetupVersionData;
-    BackColor, BackColor2: Longint;
     WizardStyle: TSetupWizardStyle;
     WizardSizePercentX, WizardSizePercentY: Integer;
     WizardImageAlphaFormat: (afIgnored, afDefined, afPremultiplied); // Must be same as Graphics.TAlphaFormat
-    PasswordHash: TSHA1Digest;
-    PasswordSalt: TSetupSalt;
-    EncryptionBaseNonce: TSetupNonce;
+    PasswordTest: Integer;
+    EncryptionKDFSalt: TSetupKDFSalt;
+    EncryptionKDFIterations: Integer;
+    EncryptionBaseNonce: TSetupEncryptionNonce;
     ExtraDiskSpaceRequired: Integer64;
     SlicesPerDisk: Integer;
     UninstallLogMode: (lmAppend, lmNew, lmOverwrite);
@@ -255,7 +255,7 @@ type
     ChunkSuboffset: Integer64;
     OriginalSize: Integer64;
     ChunkCompressedSize: Integer64;
-    SHA1Sum: TSHA1Digest;
+    SHA256Sum: TSHA256Digest;
     SourceTimeStamp: TFileTime;
     FileVersionMS, FileVersionLS: DWORD;
     Flags: set of (foVersionInfoValid, foVersionInfoNotValid, foTimeStampInUTC,

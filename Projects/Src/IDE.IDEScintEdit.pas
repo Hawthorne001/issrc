@@ -101,9 +101,9 @@ type
     function GetRectExtendShiftState(const Desired: Boolean): TShiftState;
     procedure UpdateIndicators(const Ranges: TScintRangeList;
       const IndicatorNumber: TIDEScintIndicatorNumber);
-    procedure UpdateMarginsAndSquigglyAndCaretWidths(const IconMarkersWidth,
+    procedure UpdateWidthsAndSizes(const IconMarkersWidth,
       BaseChangeHistoryWidth, BaseFolderMarkersWidth, LeftBlankMarginWidth,
-      RightBlankMarginWidth, SquigglyWidth, CaretWidth: Integer);
+      RightBlankMarginWidth, SquigglyWidth, CaretWidth, WhiteSpaceSize: Integer);
     procedure UpdateThemeColorsAndStyleAttributes;
   published
     property KeyMappingType: TIDEScintKeyMappingType read FKeyMappingType write SetKeyMappingType default kmtDefault;
@@ -171,7 +171,7 @@ type
 implementation
 
 uses
-  SysUtils, MD5, ScintInt.InnoSetup;
+  SysUtils, SHA256, ScintInt.InnoSetup;
   
 { TIDEScintEdit }
 
@@ -227,6 +227,7 @@ begin
   Call(SCI_SETMULTIPLESELECTION, 1, 0);
   Call(SCI_SETADDITIONALSELECTIONTYPING, 1, 0);
   Call(SCI_SETMULTIPASTE, SC_MULTIPASTE_EACH, 0);
+  Call(SCI_SETCOPYSEPARATOR, 0, LineEndingString);
 
   AssignCmdKey('Z', [ssShift, ssCtrl], SCI_REDO);
   
@@ -401,11 +402,11 @@ procedure TIDEScintEdit.UpdateIndicators(const Ranges: TScintRangeList;
   function HashRanges(const Ranges: TScintRangeList): String;
   begin
     if Ranges.Count > 0 then begin
-      var Context: TMD5Context;
-      MD5Init(Context);
+      var Context: TSHA256Context;
+      SHA256Init(Context);
       for var Range in Ranges do
-        MD5Update(Context, Range, SizeOf(Range));
-      Result := MD5DigestToString(MD5Final(Context));
+        SHA256Update(Context, Range, SizeOf(Range));
+      Result := SHA256DigestToString(SHA256Final(Context));
     end else
       Result := '';
   end;
@@ -435,9 +436,9 @@ begin
   end;
 end;
 
-procedure TIDEScintEdit.UpdateMarginsAndSquigglyAndCaretWidths(const IconMarkersWidth,
+procedure TIDEScintEdit.UpdateWidthsAndSizes(const IconMarkersWidth,
   BaseChangeHistoryWidth, BaseFolderMarkersWidth, LeftBlankMarginWidth,
-  RightBlankMarginWidth, SquigglyWidth, CaretWidth: Integer);
+  RightBlankMarginWidth, SquigglyWidth, CaretWidth, WhiteSpaceSize: Integer);
 begin
   Call(SCI_SETMARGINWIDTHN, mmIcons, IconMarkersWidth);
 
@@ -462,6 +463,8 @@ begin
   Call(SCI_INDICSETSTROKEWIDTH, minSquiggly, SquigglyWidth);
 
   Call(SCI_SETCARETWIDTH, CaretWidth, 0);
+
+  Call(SCI_SETWHITESPACESIZE, WhiteSpaceSize, 0);
 end;
 
 procedure TIDEScintEdit.UpdateThemeColorsAndStyleAttributes;
@@ -489,6 +492,8 @@ begin
     Call(SCI_SETELEMENTCOLOUR, SC_ELEMENT_SELECTION_SECONDARY_BACK, SelBackColor);
     Call(SCI_SETELEMENTCOLOUR, SC_ELEMENT_SELECTION_INACTIVE_BACK, SelBackColor);
     Call(SCI_SETELEMENTCOLOUR, SC_ELEMENT_SELECTION_INACTIVE_ADDITIONAL_BACK, SelBackColor);
+
+    Call(SCI_SETELEMENTCOLOUR, SC_ELEMENT_WHITE_SPACE, FTheme.Colors[tcIndentGuideFore] or (SC_ALPHA_OPAQUE shl 24));
 
     Call(SCI_SETELEMENTCOLOUR, SC_ELEMENT_FOLD_LINE, FTheme.Colors[tcIndentGuideFore] or (70 shl 24));
     Call(SCI_SETFOLDMARGINCOLOUR, Ord(True), FTheme.Colors[tcBack]);

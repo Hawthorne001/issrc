@@ -244,9 +244,6 @@ end;
 
 { --- }
 
-type
-  TNotebookAccess = class(TNotebook);
-
 procedure TWizardForm.FormCreate(Sender: TObject);
 
   procedure AddLanguages(const Extension: String);
@@ -302,7 +299,7 @@ begin
 
   InitFormFont(Self);
   if Font.Name = 'Segoe UI' then begin
-    { See Wizard.pas }
+    { See Setup.WizardForm.pas }
     for I := 0 to OuterNotebook.PageCount-1 do
       OuterNotebook.Pages[I].HandleNeeded;
     for I := 0 to InnerNotebook.PageCount-1 do
@@ -312,7 +309,6 @@ begin
   if FontExists('Verdana') then
     WelcomeLabel1.Font.Name := 'Verdana';
 
-  TNotebookAccess(OuterNotebook).ParentBackground := False;
   OuterNotebook.Color := clWindow;
 
   MakeBold(PageNameLabel);
@@ -950,12 +946,15 @@ begin
     { AppFiles }
     if not NotCreateAppDirCheck.Checked and not NoAppExeCheck.Checked then begin
       Files := Files + 'Source: "' + PathExtractPath(AppExeEdit.Text) + AppExeName + '"; DestDir: "{app}"; Flags: ignoreversion' + SNewLine;
+      var AppExeIsReallyExe := SameText(PathExtractExt(AppExeEdit.Text), '.exe');
       if AppExeRunCheck.Checked then begin
-        if SameText(PathExtractExt(AppExeEdit.Text), '.exe') then
+        if AppExeIsReallyExe then
           Run := Run + 'Filename: "{app}\' + AppExeName + '"; Description: "{cm:LaunchProgram,' + AppAmpEscapedName + '}"; Flags: nowait postinstall skipifsilent' + SNewLine
         else
           Run := Run + 'Filename: "{app}\' + AppExeName + '"; Description: "{cm:LaunchProgram,' + AppAmpEscapedName + '}"; Flags: shellexec postinstall skipifsilent' + SNewLine;
       end;
+      if AppExeIsReallyExe then
+        Setup := Setup + 'UninstallDisplayIcon={app}\' + AppExeName + SNewLine;
       if Is64BitPEImage(AppExeEdit.Text) then begin
         Setup := Setup + '; "ArchitecturesAllowed=x64compatible" specifies that Setup cannot run' + SNewLine;
         Setup := Setup + '; on anything but x64 and Windows 11 on Arm.' + SNewLine;
@@ -975,7 +974,6 @@ begin
       Registry := Registry + 'Root: HKA; Subkey: "Software\Classes\' + AppAssocKey + '"; ValueType: string; ValueName: ""; ValueData: "' + AppAssocNameEdit.Text + '"; Flags: uninsdeletekey' + SNewLine;
       Registry := Registry + 'Root: HKA; Subkey: "Software\Classes\' + AppAssocKey + '\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\' + AppExeName + ',0"' + SNewLine;
       Registry := Registry + 'Root: HKA; Subkey: "Software\Classes\' + AppAssocKey + '\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\' + AppExeName + '"" ""%1"""' + SNewLine;
-      Registry := Registry + 'Root: HKA; Subkey: "Software\Classes\Applications\' + AppExeName + '\SupportedTypes"; ValueType: string; ValueName: ".myp"; ValueData: ""' + SNewLine;
     end;
 
     FFilesHelper.AddScript(Files);
@@ -1057,7 +1055,6 @@ begin
     end;
 
     { Other }
-    Setup := Setup + 'Compression=lzma' + SNewLine;
     Setup := Setup + 'SolidCompression=yes' + SNewLine;
     Setup := Setup + 'WizardStyle=modern' + SNewLine;
 

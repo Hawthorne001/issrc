@@ -7,8 +7,9 @@
         <TargetedPlatforms>1</TargetedPlatforms>
         <AppType>Application</AppType>
         <FrameworkType>VCL</FrameworkType>
-        <ProjectVersion>19.5</ProjectVersion>
+        <ProjectVersion>20.1</ProjectVersion>
         <Platform Condition="'$(Platform)'==''">Win32</Platform>
+        <ProjectName Condition="'$(ProjectName)'==''">Compil32</ProjectName>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Config)'=='Base' or '$(Base)'!=''">
         <Base>true</Base>
@@ -140,12 +141,11 @@
             <Form>RegistryDesignerForm</Form>
         </DCCReference>
         <DCCReference Include="Src\IDE.Wizard.WizardFormRegistryHelper.pas"/>
-        <DCCReference Include="..\Components\MD5.pas"/>
         <DCCReference Include="..\Components\ScintInt.InnoSetup.pas"/>
         <DCCReference Include="Src\Shared.ScriptFunc.pas"/>
-        <DCCReference Include="Src\Shared.SetupTypes.pas"/>
+        <DCCReference Include="Src\Shared.SetupSteps.pas"/>
         <DCCReference Include="Src\Shared.Struct.pas"/>
-        <DCCReference Include="..\Components\SHA1.pas"/>
+        <DCCReference Include="..\Components\SHA256.pas"/>
         <DCCReference Include="Src\Shared.DotNetVersion.pas"/>
         <DCCReference Include="..\ISHelp\isxclasses_wordlists_generated.pas"/>
         <DCCReference Include="Src\IDE.ImagesModule.pas">

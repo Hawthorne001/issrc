@@ -14,6 +14,8 @@ interface
 { Note: When any messages are added/deleted/changed, MessagesHdrID needs to be
   updated in Struct.pas }
 
+const
+  SetupMessageIDPrefixLength = 3;
 type
   TSetupMessageID = (
     msgAbortRetryIgnoreCancel,
@@ -43,6 +45,7 @@ type
     msgButtonNoToAll,
     msgButtonOK,
     msgButtonStopDownload,
+    msgButtonStopExtraction,
     msgButtonWizardBrowse,
     msgButtonYes,
     msgButtonYesToAll,
@@ -83,6 +86,8 @@ type
     msgErrorDownloadFailed,
     msgErrorDownloadSizeFailed,
     msgErrorExecutingProgram,
+    msgErrorExtractionAborted,
+    msgErrorExtractionFailed,
     msgErrorFileHash1,
     msgErrorFileHash2,
     msgErrorFileSize,
@@ -117,6 +122,7 @@ type
     msgExistingFileReadOnlyKeepExisting,
     msgExitSetupMessage,
     msgExitSetupTitle,
+    msgExtractionLabel,
     msgFileAbortRetryIgnoreSkipNotRecommended,
     msgFileAbortRetryIgnoreIgnoreNotRecommended,
     msgFileExistsSelectAction,
@@ -232,6 +238,7 @@ type
     msgStatusRunProgram,
     msgStatusUninstalling,
     msgStopDownload,
+    msgStopExtraction,
     msgTranslatorNote,
     msgUninstallAppFullTitle,
     msgUninstallAppTitle,

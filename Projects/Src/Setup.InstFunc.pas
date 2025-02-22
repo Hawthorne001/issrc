@@ -12,7 +12,7 @@ unit Setup.InstFunc;
 interface
 
 uses
-  Windows, SysUtils, Shared.Int64Em, MD5, SHA1, Shared.CommonFunc;
+  Windows, SysUtils, Shared.Int64Em, SHA256, Shared.CommonFunc;
 
 type
   PSimpleStringListArray = ^TSimpleStringListArray;
@@ -58,15 +58,9 @@ function GenerateNonRandomUniqueTempDir(const LimitCurrentUserSidAccess: Boolean
 function GetComputerNameString: String;
 function GetFileDateTime(const DisableFsRedir: Boolean; const Filename: String;
   var DateTime: TFileTime): Boolean;
-function GetMD5OfFile(const DisableFsRedir: Boolean; const Filename: String): TMD5Digest;
-function GetMD5OfAnsiString(const S: AnsiString): TMD5Digest;
-function GetMD5OfUnicodeString(const S: UnicodeString): TMD5Digest;
-function GetSHA1OfFile(const DisableFsRedir: Boolean; const Filename: String): TSHA1Digest;
-function GetSHA1OfAnsiString(const S: AnsiString): TSHA1Digest;
-function GetSHA1OfUnicodeString(const S: UnicodeString): TSHA1Digest;
-function GetSHA256OfFile(const DisableFsRedir: Boolean; const Filename: String): String;
-function GetSHA256OfAnsiString(const S: AnsiString): String;
-function GetSHA256OfUnicodeString(const S: UnicodeString): String;
+function GetSHA256OfFile(const DisableFsRedir: Boolean; const Filename: String): TSHA256Digest;
+function GetSHA256OfAnsiString(const S: AnsiString): TSHA256Digest;
+function GetSHA256OfUnicodeString(const S: UnicodeString): TSHA256Digest;
 function GetRegRootKeyName(const RootKey: HKEY): String;
 function GetSpaceOnDisk(const DisableFsRedir: Boolean; const DriveRoot: String;
   var FreeBytes, TotalBytes: Integer64): Boolean;
@@ -87,8 +81,10 @@ procedure InternalErrorFmt(const S: String; const Args: array of const);
 function IsDirEmpty(const DisableFsRedir: Boolean; const Dir: String): Boolean;
 function IsProtectedSystemFile(const DisableFsRedir: Boolean;
   const Filename: String): Boolean;
-function MakePendingFileRenameOperationsChecksum: TMD5Digest;
+function MakePendingFileRenameOperationsChecksum: TSHA256Digest;
 function ModifyPifFile(const Filename: String; const CloseOnExit: Boolean): Boolean;
+function PathHasInvalidCharacters(const S: String;
+  const AllowDriveLetterColon: Boolean): Boolean;
 procedure RaiseFunctionFailedError(const FunctionName: String);
 procedure RaiseOleError(const FunctionName: String; const ResultCode: HRESULT);
 procedure RefreshEnvironment;
@@ -106,7 +102,7 @@ implementation
 uses
   Messages, ShellApi, PathFunc, SetupLdrAndSetup.InstFunc, SetupLdrAndSetup.Messages,
   Shared.SetupMessageIDs, Shared.FileClass, SetupLdrAndSetup.RedirFunc, Shared.SetupTypes,
-  Hash, Classes, RegStr, Math;
+  Classes, RegStr, Math;
 
 procedure InternalError(const Id: String);
 begin
@@ -556,110 +552,36 @@ begin
   DateTime.dwHighDateTime := 0;
 end;
 
-function GetMD5OfFile(const DisableFsRedir: Boolean; const Filename: String): TMD5Digest;
-{ Gets MD5 sum of the file Filename. An exception will be raised upon
-  failure. }
-var
-  Buf: array[0..65535] of Byte;
-begin
-  var Context: TMD5Context;
-  MD5Init(Context);
-  var F := TFileRedir.Create(DisableFsRedir, Filename, fdOpenExisting, faRead, fsReadWrite);
-  try
-    while True do begin
-      var NumRead := F.Read(Buf, SizeOf(Buf));
-      if NumRead = 0 then
-        Break;
-      MD5Update(Context, Buf, NumRead);
-    end;
-  finally
-    F.Free;
-  end;
-  Result := MD5Final(Context);
-end;
-
-function GetSHA1OfFile(const DisableFsRedir: Boolean; const Filename: String): TSHA1Digest;
-{ Gets SHA-1 sum of the file Filename. An exception will be raised upon
-  failure. }
-var
-  Buf: array[0..65535] of Byte;
-begin
-  var Context: TSHA1Context;
-  SHA1Init(Context);
-  var F := TFileRedir.Create(DisableFsRedir, Filename, fdOpenExisting, faRead, fsReadWrite);
-  try
-    while True do begin
-      var NumRead := F.Read(Buf, SizeOf(Buf));
-      if NumRead = 0 then
-        Break;
-      SHA1Update(Context, Buf, NumRead);
-    end;
-  finally
-    F.Free;
-  end;
-  Result := SHA1Final(Context);
-end;
-
-function GetSHA256OfFile(const DisableFsRedir: Boolean; const Filename: String): String;
+function GetSHA256OfFile(const DisableFsRedir: Boolean; const Filename: String): TSHA256Digest;
 { Gets SHA-256 sum as a string of the file Filename. An exception will be raised upon
   failure. }
-begin
-  var PrevState: TPreviousFsRedirectionState;
-  if not DisableFsRedirectionIf(DisableFsRedir, PrevState) then
-    InternalError('GetSHA256OfFile: DisableFsRedirectionIf failed.');
-  try
-    Result := THashSHA2.GetHashStringFromFile(Filename, SHA256);
-  finally
-    RestoreFsRedirection(PrevState);
-  end;
-end;
-
-function GetMD5OfAnsiString(const S: AnsiString): TMD5Digest;
-begin
-  Result := MD5Buf(Pointer(S)^, Length(S)*SizeOf(S[1]));
-end;
-
-function GetMD5OfUnicodeString(const S: UnicodeString): TMD5Digest;
-begin
-  Result := MD5Buf(Pointer(S)^, Length(S)*SizeOf(S[1]));
-end;
-
-function GetSHA1OfAnsiString(const S: AnsiString): TSHA1Digest;
-begin
-  Result := SHA1Buf(Pointer(S)^, Length(S)*SizeOf(S[1]));
-end;
-
-function GetSHA1OfUnicodeString(const S: UnicodeString): TSHA1Digest;
-begin
-  Result := SHA1Buf(Pointer(S)^, Length(S)*SizeOf(S[1]));
-end;
-
-function GetSHA256OfAnsiString(const S: AnsiString): String;
 var
-  M: TMemoryStream;
+  Buf: array[0..65535] of Byte;
 begin
-  M := TMemoryStream.Create;
+  var Context: TSHA256Context;
+  SHA256Init(Context);
+  var F := TFileRedir.Create(DisableFsRedir, Filename, fdOpenExisting, faRead, fsReadWrite);
   try
-    M.Write(Pointer(S)^, Length(S)*SizeOf(S[1]));
-    M.Seek(0, soFromBeginning);
-    Result := THashSHA2.GetHashString(M, SHA256);
+    while True do begin
+      var NumRead := F.Read(Buf, SizeOf(Buf));
+      if NumRead = 0 then
+        Break;
+      SHA256Update(Context, Buf, NumRead);
+    end;
   finally
-    M.Free;
+    F.Free;
   end;
+  Result := SHA256Final(Context);
 end;
 
-function GetSHA256OfUnicodeString(const S: UnicodeString): String;
-var
-  M: TMemoryStream;
+function GetSHA256OfAnsiString(const S: AnsiString): TSHA256Digest;
 begin
-  M := TMemoryStream.Create;
-  try
-    M.Write(Pointer(S)^, Length(S)*SizeOf(S[1]));
-    M.Seek(0, soFromBeginning);
-    Result := THashSHA2.GetHashString(M, SHA256);
-  finally
-    M.Free;
-  end;
+  Result := SHA256Buf(Pointer(S)^, Length(S)*SizeOf(S[1]));
+end;
+
+function GetSHA256OfUnicodeString(const S: UnicodeString): TSHA256Digest;
+begin
+  Result := SHA256Buf(Pointer(S)^, Length(S)*SizeOf(S[1]));
 end;
 
 var
@@ -940,31 +862,31 @@ begin
     Result := '';
 end;
 
-function MakePendingFileRenameOperationsChecksum: TMD5Digest;
+function MakePendingFileRenameOperationsChecksum: TSHA256Digest;
 { Calculates a checksum of the current PendingFileRenameOperations registry
   value The caller can use this checksum to determine if
   PendingFileRenameOperations was changed (perhaps by another program). }
 var
-  Context: TMD5Context;
+  Context: TSHA256Context;
   K: HKEY;
   S: String;
 begin
-  MD5Init(Context);
+  SHA256Init(Context);
   try
     if RegOpenKeyExView(rvDefault, HKEY_LOCAL_MACHINE, 'SYSTEM\CurrentControlSet\Control\Session Manager',
        0, KEY_QUERY_VALUE, K) = ERROR_SUCCESS then begin
       if RegQueryMultiStringValue(K, 'PendingFileRenameOperations', S) then
-        MD5Update(Context, S[1], Length(S)*SizeOf(S[1]));
+        SHA256Update(Context, S[1], Length(S)*SizeOf(S[1]));
       { When "PendingFileRenameOperations" is full, it spills over into
         "PendingFileRenameOperations2" }
       if RegQueryMultiStringValue(K, 'PendingFileRenameOperations2', S) then
-        MD5Update(Context, S[1], Length(S)*SizeOf(S[1]));
+        SHA256Update(Context, S[1], Length(S)*SizeOf(S[1]));
       RegCloseKey(K);
     end;
   except
     { don't propagate exceptions }
   end;
-  Result := MD5Final(Context);
+  Result := SHA256Final(Context);
 end;
 
 procedure EnumFileReplaceOperationsFilenames(const EnumFunc: TEnumFROFilenamesProc;
@@ -1141,6 +1063,69 @@ begin
   else
     Result := ForceDirectories(DisableFsRedir, PathExtractPath(Dir)) and
       CreateDirectoryRedir(DisableFsRedir, Dir);
+end;
+
+function PathHasInvalidCharacters(const S: String;
+  const AllowDriveLetterColon: Boolean): Boolean;
+{ Checks the specified path for characters that are never allowed in paths,
+  or characters and path components that are accepted by the system but might
+  present a security problem (such as '..' and sometimes ':').
+  Specifically, True is returned if S includes any of the following:
+  - Control characters (0-31)
+  - One of these characters: /*?"<>|
+    (This means forward slashes and the prefixes '\\?\' and '\??\' are never
+    allowed.)
+  - Colons (':'), except when AllowDriveLetterColon=True and the string's
+    first character is a letter and the second character is the only colon.
+    (This blocks NTFS alternate data stream names.)
+  - A component with a trailing dot or space
+
+  Due to the last rule above, '.' and '..' components are never allowed, nor
+  are components like these:
+    'file '
+    'file.'
+    'file. . .'
+    'file . . '
+  When expanding paths (with no '\\?\' prefix used), Windows 11 23H2 silently
+  removes all trailing dots and spaces from the end of the string. Therefore,
+  if used at the end of a path, all of the above cases yield just 'file'.
+  On preceding components of the path, nothing is done with spaces; if there
+  is exactly one dot at the end, it is removed (e.g., 'dir.\file' becomes
+  'dir\file'), while multiple dots are left untouched ('dir..\file' doesn't
+  change).
+  By rejecting trailing dots and spaces up front, we avoid all that weirdness
+  and the problems that could arise from it.
+
+  Since ':' is considered invalid (except in the one case noted above), it's
+  not possible to sneak in disallowed dots/spaces by including an NTFS
+  alternate data stream name. The function will return True in these cases:
+    '..:streamname'
+    'file :streamname'
+}
+begin
+  Result := True;
+  for var I := Low(S) to High(S) do begin
+    var C := S[I];
+    if Ord(C) < 32 then
+      Exit;
+    case C of
+      #32, '.':
+        begin
+          if (I = High(S)) or PathCharIsSlash(S[I+1]) then
+            Exit;
+        end;
+      ':':
+        begin
+          { The A-Z check ensures that '.:streamname', ' :streamname', and
+            '\:streamname' are disallowed. }
+          if not AllowDriveLetterColon or (I <> Low(S)+1) or
+             not CharInSet(S[Low(S)], ['A'..'Z', 'a'..'z']) then
+            Exit;
+        end;
+      '/', '*', '?', '"', '<', '>', '|': Exit;
+    end;
+  end;
+  Result := False;
 end;
 
 { TSimpleStringList }
