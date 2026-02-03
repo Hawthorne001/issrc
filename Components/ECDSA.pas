@@ -2,7 +2,7 @@ unit ECDSA;
 
 {
   Inno Setup
-  Copyright (C) 1997-2025 Jordan Russell
+  Copyright (C) 1997-2026 Jordan Russell
   Portions by Martijn Laan
   For conditions of distribution and use, see LICENSE.TXT.
 
@@ -37,7 +37,7 @@ type
     FAlgorithmHandle: THandle;  { BCRYPT_ALG_HANDLE }
     FKeyHandle: THandle;        { BCRYPT_KEY_HANDLE }
     class procedure CheckStatus(const AFunctionName: String;
-      const AStatus: NTSTATUS); static;
+      const AStatus: NTSTATUS); static; static;
     procedure KeyHandleRequired;
   public
     constructor Create;
